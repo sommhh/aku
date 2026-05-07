@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>現場万能ビューワー Pro v3.4.1</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a84ff">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#111;--muted:#666;--accent:#0a84ff;--border:#e5e7eb;--warn:#fff3cd}
+@media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--fg:#f2f2f7;--muted:#8e8e93;--border:#38383a;--warn:#3a3000}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif}
+.toolbar{padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top));background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;position:absolute;top:0;width:100%;z-index:100}
+.dropzone{height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px;padding-top:60px;overflow:auto}
+.drop-card{background:var(--card);border:2px dashed var(--border);border-radius:28px;padding:28px 20px;text-align:center;width:100%;max-width:520px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+.primary{margin-top:14px;background:var(--accent);color:#fff;border:none;border-radius:14px;padding:14px 22px;font-size:16px;font-weight:700;width:100%}
+.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:10px;padding:6px 10px;font-size:14px;min-width:34px;cursor:pointer}
+.secondary.active{background:var(--accent);color:#fff}
+#viewer{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;flex-direction:column;opacity:0;pointer-events:none;visibility:hidden;transition:.15s}
+#viewer.show{opacity:1;pointer-events:auto;visibility:visible}
+.content{flex:1;position:relative;overflow:hidden;margin-top:calc(48px + env(safe-area-inset-top))}
+.pdf-wrap{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:auto}
+#pdfCanvas{background:#fff;max-width:100%;max-height:100%;object-fit:contain}
+#pdfOverlay{position:absolute;pointer-events:none;max-width:100%;max-height:100%}
+.img-wrap{width:100%;height:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;touch-action:none}
+#imgEl{max-width:none;will-change:transform;transform-origin:0 0}
+#cadCanvas,#cadOverlay{position:absolute;top:0;left:0;width:100%;height:100%}
+#cadOverlay{pointer-events:none}
+pre{margin:0;padding:16px;overflow:auto;font-size:13px;white-space:pre-wrap;word-break:break-all;height:100%;background:var(--card)}
+.info-overlay{position:fixed;left:12px;bottom:calc(12px + env(safe-area-inset-bottom));background:rgba(0,0,0,.72);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;pointer-events:none;z-index:500}
+.list{padding:12px;overflow:auto;height:100%}
+.list-item{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid var(--border);background:var(--card);border-radius:12px;margin-bottom:8px;cursor:pointer}
+.badge{font-size:11px;color:var(--muted);background:var(--bg);padding:2px 6px;border-radius:6px}
+.recent-item{display:flex;align-items:center;gap:10px;padding:10px;background:var(--card);border-radius:12px;margin-bottom:6px;cursor:pointer;border:1px solid var(--border)}
+</style>
+</head>
+<body>
+
+<main id="drop" class="dropzone">
+  <div class="drop-card" id="dropCard">
+    <div style="font-size:44px">📦</div>
+    <h2 style="margin:6px 0">現場万能ビューワー Pro v3.4.1</h2>
+    <p style="color:var(--muted);font-size:13px;margin:0">PDF赤ペン・DXF距離・高速表示</p>
+    <button class="primary" id="pickBtn">ファイルを選択</button>
+    <input id="fileInput" type="file" hidden multiple accept=".pdf,.dxf,.png,.jpg,.jpeg,.webp,.gif,.svg,.txt,.csv,.json,.md,.log,.zip">
+  </div>
+  <div id="recentList" style="width:100%;max-width:520px;margin-top:16px"></div>
+</main>
+
+<section id="viewer">
+  <div class="toolbar">
+    <button id="backBtn" style="border:none;background:none;font-size:22px">‹</button>
+    <button id="closeBtn" style="border:none;background:none;font-size:22px">✕</button>
+    <div id="fileName" style="flex:1;text-align:center;font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+    <button id="penBtn" class="secondary" style="display:none">✏️</button>
+    <button id="measureBtn" class="secondary" style="display:none" title="距離測定">📏</button>
+    <button id="pagePrev" class="secondary" style="display:none">◀</button>
+    <span id="pageInfo" style="font-size:11px;min-width:40px;text-align:center;display:none"></span>
+    <button id="pageNext" class="secondary" style="display:none">▶</button>
+    <button id="zoomOut" class="secondary">－</button>
+    <button id="zoomIn" class="secondary">＋</button>
+  </div>
+  <div class="content">
+    <div id="pdfWrap" class="pdf-wrap" style="display:none"><canvas id="pdfCanvas"></canvas><canvas id="pdfOverlay"></canvas></div>
+    <div id="imgView" class="img-wrap" style="display:none"><img id="imgEl"></div>
+    <pre id="textView" style="display:none"></pre>
+    <div id="cadView" style="display:none;position:relative;width:100%;height:100%"><canvas id="cadCanvas"></canvas><canvas id="cadOverlay"></canvas></div>
+    <div id="listView" class="list" style="display:none"></div>
+    <div id="fallbackView" style="display:none;padding:40px;text-align:center"></div>
+  </div>
+  <div id="coordOverlay" class="info-overlay" style="display:none"></div>
+</section>
+
+<script src="https://unpkg.com/dxf-viewer@1.0.6/dist/dxf-viewer.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.29/dist/zip.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const state = { file:null, url:null, dxf:null, pdfDoc:null, pdfPage:1, pdfScale:1, scale:1, imgX:0, imgY:0, archive:null, dpr:window.devicePixelRatio||1, pdfAnnotations:{}, isDrawing:false, isMeasuring:false, measurePts:[], imageList:[], imageIndex:0 };
+const els = {
+  fileInput:document.getElementById('fileInput'),
+  viewer:document.getElementById('viewer'),
+  name:document.getElementById('fileName'),
+  pdfWrap:document.getElementById('pdfWrap'),
+  pdf:document.getElementById('pdfCanvas'),
+  pdfOverlay:document.getElementById('pdfOverlay'),
+  img:document.getElementById('imgEl'),
+  imgView:document.getElementById('imgView'),
+  text:document.getElementById('textView'),
+  cad:document.getElementById('cadCanvas'),
+  cadOverlay:document.getElementById('cadOverlay'),
+  cadView:document.getElementById('cadView'),
+  list:document.getElementById('listView'),
+  fallback:document.getElementById('fallbackView'),
+  overlay:document.getElementById('coordOverlay'),
+  pagePrev:document.getElementById('pagePrev'),
+  pageNext:document.getElementById('pageNext'),
+  pageInfo:document.getElementById('pageInfo'),
+  penBtn:document.getElementById('penBtn'),
+  measureBtn:document.getElementById('measureBtn'),
+  recentList:document.getElementById('recentList')
+};
+
+function hideEl(el){ el.style.display='none'; }
+function showEl(el,type='block'){ el.style.display=type; }
+
+document.getElementById('pickBtn').onclick=()=>els.fileInput.click();
+els.fileInput.onchange=e=>{ 
+  const files=[...e.target.files]; 
+  if(files.length){ 
+    state.imageList = files.filter(f=>/\.(png|jpe?g|webp|gif|svg)$/i.test(f.name));
+    state.imageIndex = 0;
+    openFile(files[0]); 
+  } 
+  e.target.value=''; 
+};
+
+let db;
+const initDB = () => {
+  return new Promise((resolve)=>{
+    const req = indexedDB.open('genbaDB',2);
+    req.onupgradeneeded = e => { 
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains('recents')) db.createObjectStore('recents',{keyPath:'id',autoIncrement:true});
+      if(!db.objectStoreNames.contains('annotations')) db.createObjectStore('annotations',{keyPath:'key'});
+    };
+    req.onsuccess = e => { db = e.target.result; loadRecents(); resolve(); };
+    req.onerror = () => resolve();
+  });
+};
+initDB();
+
+async function openFile(file){
+  state.file=file; state.scale=1; state.imgX=0; state.imgY=0; state.pdfScale=1; state.isDrawing=false; state.isMeasuring=false; state.measurePts=[];
+  resetViewers();
+  els.viewer.classList.add('show');
+  els.name.textContent=file.name;
+  const ext=file.name.split('.').pop().toLowerCase();
+  try{
+    hideControls();
+    if(ext==='zip'){ await openArchive(file); return; }
+    if(['txt','csv','json','md','log'].includes(ext)){ els.text.textContent=await file.text(); showEl(els.text); }
+    else if(ext==='pdf'){ await renderPDF(file); showPDFControls(); }
+    else if(['png','jpg','jpeg','webp','gif','svg'].includes(ext)){ 
+      state.url=URL.createObjectURL(file); 
+      els.img.src=state.url; 
+      updateImgTransform(); 
+      showEl(els.imgView,'flex'); 
+      enableImagePanZoom(); 
+      if(state.imageList.length>1) showImageControls(); 
+    }
+    else if(ext==='dxf'){ await loadDXF(file); showDXFControls(); }
+    else{ showFallback(`${ext.toUpperCase()}は未対応`); }
+    saveRecent(file);
+  }catch(err){ showFallback(err.message); }
+}
+
+function hideControls(){ hideEl(els.pagePrev); hideEl(els.pageNext); hideEl(els.pageInfo); hideEl(els.penBtn); hideEl(els.measureBtn); }
+function showPDFControls(){ showEl(els.pagePrev,'inline-block'); showEl(els.pageNext,'inline-block'); showEl(els.pageInfo,'inline-block'); showEl(els.penBtn,'inline-block'); }
+function showImageControls(){ showEl(els.pagePrev,'inline-block'); showEl(els.pageNext,'inline-block'); showEl(els.pageInfo,'inline-block'); els.pageInfo.textContent=`${state.imageIndex+1}/${state.imageList.length}`; }
+function showDXFControls(){ showEl(els.measureBtn,'inline-block'); }
+
+// PDF関連
+async function renderPDF(file,password=null){
+  showEl(els.pdfWrap,'flex');
+  const buf=await file.arrayBuffer();
+  state.pdfDoc=await pdfjsLib.getDocument({data:buf,password}).promise;
+  state.pdfPage=1; 
+  bindPdfTouch(); 
+  await drawPDFPage(); 
+  setupPDFDrawing();
+}
+
+async function drawPDFPage(){
+  const page = await state.pdfDoc.getPage(state.pdfPage);
+  const containerWidth = els.pdfWrap.clientWidth || window.innerWidth;
+  const viewportBase = page.getViewport({ scale: 1 });
+  const baseScale = (containerWidth / viewportBase.width) * 0.95;
+  const viewport = page.getViewport({ scale: baseScale * state.pdfScale * state.dpr });
+  
+  const ctx = els.pdf.getContext('2d');
+  els.pdf.width = viewport.width;
+  els.pdf.height = viewport.height;
+  els.pdfOverlay.width = viewport.width;
+  els.pdfOverlay.height = viewport.height;
+
+  await page.render({ canvasContext: ctx, viewport: viewport, intent: 'display' }).promise;
+  els.pageInfo.textContent = `${state.pdfPage}/${state.pdfDoc.numPages}`;
+  redrawAnnotations();
+}
+
+function bindPdfTouch(){ 
+  if(state.pdfTouchBound) return; state.pdfTouchBound=true; let sx=0; 
+  els.pdfWrap.addEventListener('touchstart',e=>{ sx=e.touches[0].clientX }); 
+  els.pdfWrap.addEventListener('touchend',async e=>{
+    if(state.isDrawing||!state.pdfDoc) return;
+    const dx=e.changedTouches[0].clientX-sx;
+    if(Math.abs(dx)>50){
+      state.pdfPage+=dx<0?1:-1;
+      state.pdfPage=Math.max(1,Math.min(state.pdfDoc.numPages,state.pdfPage));
+      await drawPDFPage();
+    }
+  }); 
+}
+
+function setupPDFDrawing(){
+  const ov=els.pdfOverlay, ctx=ov.getContext('2d'); let drawing=false, pts=[];
+  els.penBtn.onclick=()=>{
+    state.isDrawing=!state.isDrawing;
+    els.penBtn.classList.toggle('active',state.isDrawing);
+    ov.style.pointerEvents = state.isDrawing ? 'auto' : 'none';
+  };
+  function getNorm(e){
+    const rect = ov.getBoundingClientRect();
+    return {x: (e.clientX-rect.left)/rect.width, y: (e.clientY-rect.top)/rect.height};
+  }
+  ov.onpointerdown=e=>{ if(!state.isDrawing) return; drawing=true; pts=[getNorm(e)]; };
+  ov.onpointermove=e=>{ 
+    if(!drawing) return; 
+    const p=getNorm(e); pts.push(p); 
+    const w=ov.width, h=ov.height;
+    ctx.strokeStyle='red'; ctx.lineWidth=3*state.dpr; ctx.lineCap='round'; 
+    ctx.beginPath(); ctx.moveTo(pts[pts.length-2].x*w, pts[pts.length-2].y*h); 
+    ctx.lineTo(p.x*w, p.y*h); ctx.stroke(); 
+  };
+  ov.onpointerup=()=>{ if(!drawing) return; drawing=false; if(!state.pdfAnnotations[state.pdfPage]) state.pdfAnnotations[state.pdfPage]=[]; state.pdfAnnotations[state.pdfPage].push(pts); };
+}
+
+function redrawAnnotations(){ 
+  const ctx=els.pdfOverlay.getContext('2d'); 
+  ctx.clearRect(0,0,els.pdfOverlay.width,els.pdfOverlay.height); 
+  const ann=state.pdfAnnotations[state.pdfPage]||[]; 
+  const w=els.pdfOverlay.width, h=els.pdfOverlay.height;
+  ctx.strokeStyle='red'; ctx.lineWidth=3*state.dpr; ctx.lineCap='round';
+  ann.forEach(stroke=>{ 
+    ctx.beginPath(); 
+    stroke.forEach((p,i)=>{ if(i===0) ctx.moveTo(p.x*w, p.y*h); else ctx.lineTo(p.x*w, p.y*h); }); 
+    ctx.stroke(); 
+  }); 
+}
+
+// DXF関連
+async function loadDXF(file){
+  showEl(els.cadView); showEl(els.overlay,'block');
+  const c=els.cad, ov=els.cadOverlay;
+  c.width=els.cadView.clientWidth*state.dpr; c.height=els.cadView.clientHeight*state.dpr;
+  ov.width=c.width; ov.height=c.height;
+  
+  if(!state.dxf){ state.dxf=new DxfViewer.DxfViewer(c,{autoResize:true,clearColor:'#ffffff'}); }
+  await state.dxf.Load({dxf:await file.text()}); state.dxf.Fit();
+  
+  els.measureBtn.onclick=()=>{
+    state.isMeasuring=!state.isMeasuring;
+    els.measureBtn.classList.toggle('active',state.isMeasuring);
+    state.measurePts=[];
+    els.overlay.textContent = state.isMeasuring ? "1点目をタップ" : "";
+    ov.getContext('2d').clearRect(0,0,ov.width,ov.height);
+  };
+
+  els.cadView.onclick=e=>{
+    if(!state.isMeasuring) return;
+    const rect=els.cadView.getBoundingClientRect();
+    const x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const p=state.dxf.GetScenePoint(x, y);
+    if(!p) return;
+    state.measurePts.push({screen:{x,y}, scene:p});
+
+    const octx=ov.getContext('2d');
+    octx.strokeStyle='#ff0000'; octx.lineWidth=2*state.dpr;
+    octx.beginPath(); octx.arc(x*state.dpr, y*state.dpr, 5, 0, Math.PI*2); octx.stroke();
+
+    if(state.measurePts.length===2){
+      const [p1, p2] = state.measurePts;
+      const dist = Math.hypot(p2.scene.x-p1.scene.x, p2.scene.y-p1.scene.y);
+      els.overlay.textContent = `距離: ${dist.toFixed(2)}`;
+      octx.beginPath(); octx.moveTo(p1.screen.x*state.dpr, p1.screen.y*state.dpr);
+      octx.lineTo(p2.screen.x*state.dpr, p2.screen.y*state.dpr); octx.stroke();
+      state.measurePts=[];
+    } else {
+      els.overlay.textContent = "2点目をタップ";
+    }
+  };
+}
+
+// その他ユーティリティ
+async function openArchive(file){
+  showEl(els.list); els.list.innerHTML='展開中...';
+  const reader=new zip.ZipReader(new zip.BlobReader(file));
+  const entries=await reader.getEntries();
+  state.archive={reader,entries,file};
+  els.list.innerHTML='';
+  entries.filter(e=>!e.directory).forEach(e=>{
+    const div=document.createElement('div'); div.className='list-item';
+    div.innerHTML=`<span>${e.filename}</span><span class="badge">${(e.uncompressedSize/1024).toFixed(0)}KB</span>`;
+    div.onclick=async()=>{
+      const blob=await e.getData(new zip.BlobWriter());
+      openFile(new File([blob], e.filename.split('/').pop()));
+    };
+    els.list.appendChild(div);
+  });
+}
+
+function resetViewers(){
+  if(state.url) URL.revokeObjectURL(state.url);
+  ["pdfWrap","imgView","text","cadView","list","fallback","overlay"].forEach(k=>hideEl(els[k]||document.getElementById(k)));
+  if(state.dxf) try{state.dxf.Clear()}catch(e){}
+  state.pdfAnnotations={};
+}
+
+function showFallback(h){ els.fallback.innerHTML=`<h3>表示エラー</h3><p>${h}</p>`; showEl(els.fallback); }
+document.getElementById('closeBtn').onclick=()=>{ els.viewer.classList.remove('show'); resetViewers(); };
+document.getElementById('backBtn').onclick=()=>{ if(state.archive){ resetViewers(); showEl(els.list); } else document.getElementById('closeBtn').click(); };
+
+document.getElementById('zoomIn').onclick=()=>{ 
+  if(els.imgView.style.display!=='none'){state.scale*=1.2;updateImgTransform()} 
+  else if(els.cadView.style.display!=='none' && state.dxf){state.dxf.Zoom(1.2)} 
+  else if(state.pdfDoc){state.pdfScale*=1.2;drawPDFPage()} 
+};
+document.getElementById('zoomOut').onclick=()=>{ 
+  if(els.imgView.style.display!=='none'){state.scale/=1.2;updateImgTransform()} 
+  else if(els.cadView.style.display!=='none' && state.dxf){state.dxf.Zoom(0.8)} 
+  else if(state.pdfDoc){state.pdfScale/=1.2;drawPDFPage()} 
+};
+
+function updateImgTransform(){ els.img.style.transform=`translate(${state.imgX}px,${state.imgY}px) scale(${state.scale})`; }
+function enableImagePanZoom(){
+  let last=null,pan=false; 
+  els.imgView.onpointerdown=e=>{pan=true; last={x:e.clientX-state.imgX,y:e.clientY-state.imgY}; els.imgView.setPointerCapture(e.pointerId)};
+  els.imgView.onpointermove=e=>{if(!pan)return; state.imgX=e.clientX-last.x; state.imgY=e.clientY-last.y; updateImgTransform()};
+  els.imgView.onpointerup=()=>pan=false;
+}
+
+async function saveRecent(file){ if(!db||file.size>10*1024*1024) return; const tx=db.transaction('recents','readwrite'); tx.objectStore('recents').add({name:file.name,blob:file,ts:Date.now()}); loadRecents(); }
+async function loadRecents(){
+  if(!db) return;
+  const req=db.transaction('recents','readonly').objectStore('recents').getAll();
+  req.onsuccess=()=>{
+    const items=req.result.sort((a,b)=>b.ts-a.ts).slice(0,5);
+    els.recentList.innerHTML = items.length?'<h4 style="margin:8px">最近のファイル</h4>':'';
+    items.forEach(it=>{
+      const div=document.createElement('div'); div.className='recent-item';
+      div.innerHTML=`<span>📄</span><div>${it.name}</div>`;
+      div.onclick=()=>openFile(it.blob);
+      els.recentList.appendChild(div);
+    });
+  };
+}
+</script>
+</body>
+</html>

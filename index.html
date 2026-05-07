@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>現場万能ビューワー Pro v3.4.1</title>
+<title>現場万能ビューワー Pro v3.7</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0a84ff">
 <style>
@@ -40,10 +40,11 @@ pre{margin:0;padding:16px;overflow:auto;font-size:13px;white-space:pre-wrap;word
 <main id="drop" class="dropzone">
   <div class="drop-card" id="dropCard">
     <div style="font-size:44px">📦</div>
-    <h2 style="margin:6px 0">現場万能ビューワー Pro v3.4.1</h2>
-    <p style="color:var(--muted);font-size:13px;margin:0">PDF赤ペン・DXF距離・高速表示</p>
+    <h2 style="margin:6px 0">現場万能ビューワー Pro v3.7</h2>
+    <p style="color:var(--muted);font-size:13px;margin:0">PDF赤ペン・DXF/JWW距離・高速表示</p>
+    <!-- FIX #8: .dwg,.jww,.jwc をacceptに追加 -->
     <button class="primary" id="pickBtn">ファイルを選択</button>
-    <input id="fileInput" type="file" hidden multiple accept=".pdf,.dxf,.png,.jpg,.jpeg,.webp,.gif,.svg,.txt,.csv,.json,.md,.log,.zip">
+    <input id="fileInput" type="file" hidden multiple accept=".pdf,.dxf,.dwg,.jww,.jwc,.png,.jpg,.jpeg,.webp,.gif,.svg,.txt,.csv,.json,.md,.log,.zip">
   </div>
   <div id="recentList" style="width:100%;max-width:520px;margin-top:16px"></div>
 </main>
@@ -78,7 +79,17 @@ pre{margin:0;padding:16px;overflow:auto;font-size:13px;white-space:pre-wrap;word
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-const state = { file:null, url:null, dxf:null, pdfDoc:null, pdfPage:1, pdfScale:1, scale:1, imgX:0, imgY:0, archive:null, dpr:window.devicePixelRatio||1, pdfAnnotations:{}, isDrawing:false, isMeasuring:false, measurePts:[], imageList:[], imageIndex:0 };
+// FIX #4: dpr はリセット関数でも復元できるように毎回再取得
+const getDpr = () => Math.min(window.devicePixelRatio || 1, 2);
+
+const state = {
+  file:null, url:null, dxf:null, pdfDoc:null, pdfPage:1, pdfScale:1,
+  scale:1, imgX:0, imgY:0, archive:null,
+  dpr: getDpr(),
+  pdfAnnotations:{}, isDrawing:false, isMeasuring:false, measurePts:[],
+  imageList:[], imageIndex:0, pdfTouchBound:false,
+  jwwDoc: null  // JWW parsed document
+};
 const els = {
   fileInput:document.getElementById('fileInput'),
   viewer:document.getElementById('viewer'),
@@ -103,8 +114,8 @@ const els = {
   recentList:document.getElementById('recentList')
 };
 
-function hideEl(el){ el.style.display='none'; }
-function showEl(el,type='block'){ el.style.display=type; }
+function hideEl(el){ if(el) el.style.display='none'; }
+function showEl(el,type='block'){ if(el) el.style.display=type; }
 
 document.getElementById('pickBtn').onclick=()=>els.fileInput.click();
 els.fileInput.onchange=e=>{ 
@@ -120,7 +131,7 @@ els.fileInput.onchange=e=>{
 let db;
 const initDB = () => {
   return new Promise((resolve)=>{
-    const req = indexedDB.open('genbaDB',2);
+    const req = indexedDB.open('genbaDB',3);
     req.onupgradeneeded = e => { 
       const db = e.target.result;
       if(!db.objectStoreNames.contains('recents')) db.createObjectStore('recents',{keyPath:'id',autoIncrement:true});
@@ -133,7 +144,10 @@ const initDB = () => {
 initDB();
 
 async function openFile(file){
-  state.file=file; state.scale=1; state.imgX=0; state.imgY=0; state.pdfScale=1; state.isDrawing=false; state.isMeasuring=false; state.measurePts=[];
+  state.file=file; state.scale=1; state.imgX=0; state.imgY=0; state.pdfScale=1;
+  state.isDrawing=false; state.isMeasuring=false; state.measurePts=[];
+  // FIX #4: ファイル切替時にdprをリセット
+  state.dpr = getDpr();
   resetViewers();
   els.viewer.classList.add('show');
   els.name.textContent=file.name;
@@ -152,6 +166,8 @@ async function openFile(file){
       if(state.imageList.length>1) showImageControls(); 
     }
     else if(ext==='dxf'){ await loadDXF(file); showDXFControls(); }
+    // FIX #統合ポイント1: JWW/JWC対応
+    else if(['jww','jwc'].includes(ext)){ await openJWW(file); showDXFControls(); }
     else{ showFallback(`${ext.toUpperCase()}は未対応`); }
     saveRecent(file);
   }catch(err){ showFallback(err.message); }
@@ -160,15 +176,18 @@ async function openFile(file){
 function hideControls(){ hideEl(els.pagePrev); hideEl(els.pageNext); hideEl(els.pageInfo); hideEl(els.penBtn); hideEl(els.measureBtn); }
 function showPDFControls(){ showEl(els.pagePrev,'inline-block'); showEl(els.pageNext,'inline-block'); showEl(els.pageInfo,'inline-block'); showEl(els.penBtn,'inline-block'); }
 function showImageControls(){ showEl(els.pagePrev,'inline-block'); showEl(els.pageNext,'inline-block'); showEl(els.pageInfo,'inline-block'); els.pageInfo.textContent=`${state.imageIndex+1}/${state.imageList.length}`; }
+// FIX #9: showDXFControls はJWWでも共用
 function showDXFControls(){ showEl(els.measureBtn,'inline-block'); }
 
 // PDF関連
-async function renderPDF(file,password=null){
+async function renderPDF(file, password=null){
   showEl(els.pdfWrap,'flex');
   const buf=await file.arrayBuffer();
   state.pdfDoc=await pdfjsLib.getDocument({data:buf,password}).promise;
   state.pdfPage=1; 
   bindPdfTouch(); 
+  // FIX #12: Safari初回描画でrAF待ち
+  await new Promise(r=>requestAnimationFrame(r));
   await drawPDFPage(); 
   setupPDFDrawing();
 }
@@ -188,6 +207,8 @@ async function drawPDFPage(){
 
   await page.render({ canvasContext: ctx, viewport: viewport, intent: 'display' }).promise;
   els.pageInfo.textContent = `${state.pdfPage}/${state.pdfDoc.numPages}`;
+  // FIX #7: loadAnnotation完了後にredraw（awaitで競合防止）
+  await loadAnnotation();
   redrawAnnotations();
 }
 
@@ -225,7 +246,12 @@ function setupPDFDrawing(){
     ctx.beginPath(); ctx.moveTo(pts[pts.length-2].x*w, pts[pts.length-2].y*h); 
     ctx.lineTo(p.x*w, p.y*h); ctx.stroke(); 
   };
-  ov.onpointerup=()=>{ if(!drawing) return; drawing=false; if(!state.pdfAnnotations[state.pdfPage]) state.pdfAnnotations[state.pdfPage]=[]; state.pdfAnnotations[state.pdfPage].push(pts); };
+  ov.onpointerup=()=>{
+    if(!drawing) return; drawing=false;
+    if(!state.pdfAnnotations[state.pdfPage]) state.pdfAnnotations[state.pdfPage]=[];
+    state.pdfAnnotations[state.pdfPage].push(pts);
+    saveAnnotation();
+  };
 }
 
 function redrawAnnotations(){ 
@@ -241,32 +267,68 @@ function redrawAnnotations(){
   }); 
 }
 
+async function saveAnnotation(){
+  if(!db || !state.file) return;
+  const key = state.file.name + '_ann';
+  const tx = db.transaction('annotations','readwrite');
+  tx.objectStore('annotations').put({key, data: state.pdfAnnotations});
+}
+
+async function loadAnnotation(){
+  if(!db || !state.file) return;
+  const key = state.file.name + '_ann';
+  return new Promise(resolve=>{
+    const req = db.transaction('annotations','readonly').objectStore('annotations').get(key);
+    req.onsuccess = ()=>{ if(req.result) state.pdfAnnotations = req.result.data; resolve(); };
+    req.onerror = ()=>resolve();
+  });
+}
+
 // DXF関連
 async function loadDXF(file){
   showEl(els.cadView); showEl(els.overlay,'block');
   const c=els.cad, ov=els.cadOverlay;
+  // FIX #4: DXF切替時にdpr正常値を使う
   c.width=els.cadView.clientWidth*state.dpr; c.height=els.cadView.clientHeight*state.dpr;
   ov.width=c.width; ov.height=c.height;
   
-  if(!state.dxf){ state.dxf=new DxfViewer.DxfViewer(c,{autoResize:true,clearColor:'#ffffff'}); }
+  // FIX #10: 前のdxfインスタンスを確実にdispose
+  if(state.dxf){ try{ state.dxf.Dispose ? state.dxf.Dispose() : (state.dxf.Clear && state.dxf.Clear()); }catch(e){} state.dxf=null; }
+  state.dxf = new DxfViewer.DxfViewer(c,{autoResize:true,clearColor:'#ffffff'});
+  // FIX #12: DXF初回描画でrAF待ち
+  await new Promise(r=>requestAnimationFrame(r));
   await state.dxf.Load({dxf:await file.text()}); state.dxf.Fit();
   
+  setupCadMeasure();
+}
+
+function setupCadMeasure(){
+  const ov = els.cadOverlay;
   els.measureBtn.onclick=()=>{
     state.isMeasuring=!state.isMeasuring;
     els.measureBtn.classList.toggle('active',state.isMeasuring);
     state.measurePts=[];
     els.overlay.textContent = state.isMeasuring ? "1点目をタップ" : "";
+    // FIX #2: ズーム時と測定終了時にoverlayクリア
     ov.getContext('2d').clearRect(0,0,ov.width,ov.height);
   };
 
+  // JWW用クリック（state.jwwDocがある場合は画面座標そのまま使用）
   els.cadView.onclick=e=>{
     if(!state.isMeasuring) return;
     const rect=els.cadView.getBoundingClientRect();
     const x=e.clientX-rect.left, y=e.clientY-rect.top;
-    const p=state.dxf.GetScenePoint(x, y);
-    if(!p) return;
-    state.measurePts.push({screen:{x,y}, scene:p});
 
+    let sceneP;
+    if(state.dxf){
+      sceneP = state.dxf.GetScenePoint ? state.dxf.GetScenePoint(x,y) : null;
+    } else if(state.jwwDoc){
+      // JWW: canvas座標からJWW座標への逆変換
+      sceneP = jwwScreenToScene(x, y);
+    }
+    if(!sceneP) return;
+
+    state.measurePts.push({screen:{x,y}, scene:sceneP});
     const octx=ov.getContext('2d');
     octx.strokeStyle='#ff0000'; octx.lineWidth=2*state.dpr;
     octx.beginPath(); octx.arc(x*state.dpr, y*state.dpr, 5, 0, Math.PI*2); octx.stroke();
@@ -284,45 +346,358 @@ async function loadDXF(file){
   };
 }
 
+// FIX #1/#2: JWWビュー変換パラメータを保持してズーム後も正しく測定できるようにする
+const jwwView = { scale:1, ox:0, oy:0, canvasH:0 };
+
+function jwwScreenToScene(screenX, screenY){
+  // Canvas座標 → JWW座標（Y反転）
+  const cx = screenX * state.dpr;
+  const cy = screenY * state.dpr;
+  const sx = (cx - jwwView.ox) / jwwView.scale;
+  const sy = (jwwView.canvasH - cy - jwwView.oy) / jwwView.scale;
+  return {x:sx, y:sy};
+}
+
+// =====================================================
+// JWW パーサー & レンダラー (統合ポイント2)
+// =====================================================
+
+// FIX #11: 簡易Shift_JISテーブル（半角カナ対応）
+const SJIS_HANKAKU_KANA = [
+  '｡','｢','｣','､','･','ｦ','ｧ','ｨ','ｩ','ｪ','ｫ','ｬ','ｭ','ｮ','ｯ',
+  'ｰ','ｱ','ｲ','ｳ','ｴ','ｵ','ｶ','ｷ','ｸ','ｹ','ｺ','ｻ','ｼ','ｽ','ｾ','ｿ',
+  'ﾀ','ﾁ','ﾂ','ﾃ','ﾄ','ﾅ','ﾆ','ﾇ','ﾈ','ﾉ','ﾊ','ﾋ','ﾌ','ﾍ','ﾎ','ﾏ',
+  'ﾐ','ﾑ','ﾒ','ﾓ','ﾔ','ﾕ','ﾖ','ﾗ','ﾘ','ﾙ','ﾚ','ﾛ','ﾜ','ﾝ','ﾞ','ﾟ'
+];
+
+function decodeSJIS(bytes) {
+  try {
+    const td = new TextDecoder('shift_jis', { fatal: false });
+    return td.decode(bytes).replace(/\0+$/, '');
+  } catch {
+    // FIX #11: fallback with half-width kana map
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i];
+      if (b === 0) break;
+      if (b >= 0xA1 && b <= 0xDF) {
+        s += SJIS_HANKAKU_KANA[b - 0xA1] || '?';
+      } else {
+        s += b < 0x80 ? String.fromCharCode(b) : '?';
+      }
+    }
+    return s;
+  }
+}
+
+class JwwReader {
+  constructor(u8, dv){ this.u8=u8; this.dv=dv; this.pos=0; this.le=true; }
+  eof(){ return this.pos >= this.u8.length; }
+  readU8(){ return this.u8[this.pos++]; }
+  readI16(){ const v=this.dv.getInt16(this.pos,this.le); this.pos+=2; return v; }
+  readU16(){ const v=this.dv.getUint16(this.pos,this.le); this.pos+=2; return v; }
+  readI32(){ const v=this.dv.getInt32(this.pos,this.le); this.pos+=4; return v; }
+  readU32(){ const v=this.dv.getUint32(this.pos,this.le); this.pos+=4; return v; }
+  readF64(){ const v=this.dv.getFloat64(this.pos,this.le); this.pos+=8; return v; }
+  readBytes(n){ const v=this.u8.subarray(this.pos,this.pos+n); this.pos+=n; return v; }
+  readStr(n){ return decodeSJIS(this.readBytes(n)); }
+  readCStr(maxLen){
+    let out=[]; for(let i=0;i<maxLen&&this.pos<this.u8.length;i++){
+      const b=this.u8[this.pos++]; if(b===0) break; out.push(b);
+    }
+    return decodeSJIS(Uint8Array.from(out));
+  }
+  seek(p){ this.pos=p; }
+}
+
+function jwwColorToCss(c){
+  const r=c&0xFF, g=(c>>8)&0xFF, b=(c>>16)&0xFF;
+  return `rgb(${r},${g},${b})`;
+}
+
+function parseJww(arrayBuffer){
+  const u8=new Uint8Array(arrayBuffer);
+  const dv=new DataView(arrayBuffer);
+  const r=new JwwReader(u8,dv);
+
+  // Header: 8 bytes sig + 4 bytes version + 20 bytes reserved
+  const sig=r.readStr(8);
+  const version=r.readU32();
+  r.readBytes(20);
+
+  const layers=[], entities=[], meta={units:'mm',scale:1,paper:null};
+
+  while(!r.eof()){
+    if(r.pos+8 > u8.length) break;
+    const tag=r.readStr(4);
+    if(!tag||tag.trim().length===0) break;
+    const len=r.readU32();
+    if(len>u8.length) break; // 壊れたチャンク
+    const start=r.pos;
+    try{
+      switch(tag){
+        case 'LYR1': layers.push(...jwwReadLayers(r,len)); break;
+        case 'ENT1': case 'ENT2': entities.push(...jwwReadEntities(r,len)); break;
+        case 'PAPR': meta.paper=jwwReadPaper(r,len); break;
+        case 'UNIT': meta.units=jwwReadUnits(r,len)||meta.units; break;
+        default: r.seek(start+len); break;
+      }
+    }catch(e){ r.seek(start+len); }
+  }
+  return {sig,version,layers,entities,meta};
+}
+
+function jwwReadLayers(r,len){
+  const end=r.pos+len; const layers=[];
+  while(r.pos+72<=end){
+    const idx=r.readU16(); const flag=r.readU16(); const color=r.readU32();
+    const name=r.readCStr(64);
+    layers.push({idx,flag,color,name});
+  }
+  r.seek(end); return layers;
+}
+
+function jwwReadEntities(r,len){
+  const end=r.pos+len; const out=[];
+  while(r.pos+6<=end){
+    const et=r.readU16();
+    const elen=r.readU32();
+    const estart=r.pos;
+    // FIX #3: elen===0の時の無限ループ防止
+    if(elen===0) break;
+    if(estart+elen > end){ r.seek(end); break; }
+    try{
+      switch(et){
+        case 1: out.push(jwwReadLine(r)); break;
+        case 2: out.push(jwwReadCircle(r)); break;
+        case 3: out.push(jwwReadArc(r)); break;
+        case 4: out.push(jwwReadText(r)); break;
+        case 5: out.push(jwwReadPolyline(r,elen)); break;
+        default: break;
+      }
+    }catch(e){}
+    r.seek(estart+elen);
+  }
+  r.seek(end); return out;
+}
+
+function jwwCommon(r){
+  const layer=r.readU16(); const color=r.readU32();
+  const lineType=r.readU16(); const width=r.readF64();
+  return {layer,color:jwwColorToCss(color),lineType,width};
+}
+function jwwReadLine(r){ const c=jwwCommon(r); const x1=r.readF64(),y1=r.readF64(),x2=r.readF64(),y2=r.readF64(); return {type:'LINE',...c,x1,y1,x2,y2}; }
+function jwwReadCircle(r){ const c=jwwCommon(r); const cx=r.readF64(),cy=r.readF64(),rad=r.readF64(); return {type:'CIRCLE',...c,cx,cy,r:rad}; }
+function jwwReadArc(r){ const c=jwwCommon(r); const cx=r.readF64(),cy=r.readF64(),rad=r.readF64(),a0=r.readF64(),a1=r.readF64(); return {type:'ARC',...c,cx,cy,r:rad,a0,a1}; }
+function jwwReadText(r){ const c=jwwCommon(r); const x=r.readF64(),y=r.readF64(),size=r.readF64(),rot=r.readF64(); const flags=r.readU16(); const str=r.readCStr(256); return {type:'TEXT',...c,x,y,size,rot,flags,str}; }
+function jwwReadPolyline(r,elen){ const c=jwwCommon(r); const n=r.readU16(); const points=[]; for(let i=0;i<n;i++) points.push({x:r.readF64(),y:r.readF64()}); const closed=r.readU16()!==0; return {type:'POLYLINE',...c,points,closed}; }
+function jwwReadPaper(r,len){ const end=r.pos+len; const w=r.readF64(),h=r.readF64(),scale=r.readF64(); r.seek(end); return {w,h,scale}; }
+function jwwReadUnits(r,len){ const end=r.pos+len; const code=r.readU16(); r.seek(end); return ['mm','cm','m','inch'][code]||'mm'; }
+
+function jwwBoundingBox(entities){
+  const bb={minX:Infinity,minY:Infinity,maxX:-Infinity,maxY:-Infinity};
+  const push=(x,y)=>{ bb.minX=Math.min(bb.minX,x); bb.minY=Math.min(bb.minY,y); bb.maxX=Math.max(bb.maxX,x); bb.maxY=Math.max(bb.maxY,y); };
+  for(const e of entities){
+    switch(e.type){
+      case 'LINE': push(e.x1,e.y1); push(e.x2,e.y2); break;
+      case 'CIRCLE': push(e.cx-e.r,e.cy-e.r); push(e.cx+e.r,e.cy+e.r); break;
+      case 'ARC': push(e.cx-e.r,e.cy-e.r); push(e.cx+e.r,e.cy+e.r); break;
+      case 'POLYLINE': for(const p of e.points) push(p.x,p.y); break;
+      case 'TEXT': push(e.x,e.y); push(e.x+e.size,e.y+e.size); break;
+    }
+  }
+  if(!isFinite(bb.minX)) return {minX:0,minY:0,maxX:1,maxY:1};
+  return bb;
+}
+
+function renderJwwToCanvas(doc, ctx, canvas){
+  for(const e of doc.entities){
+    ctx.save();
+    ctx.lineWidth=Math.max(0.2/jwwView.scale, e.width||0.2);
+    ctx.strokeStyle=e.color||'#000';
+    ctx.fillStyle=e.color||'#000';
+    switch(e.type){
+      case 'LINE': ctx.beginPath(); ctx.moveTo(e.x1,e.y1); ctx.lineTo(e.x2,e.y2); ctx.stroke(); break;
+      case 'CIRCLE': ctx.beginPath(); ctx.arc(e.cx,e.cy,e.r,0,Math.PI*2); ctx.stroke(); break;
+      case 'ARC': ctx.beginPath(); ctx.arc(e.cx,e.cy,e.r,e.a0,e.a1,false); ctx.stroke(); break;
+      case 'POLYLINE':
+        if(e.points.length>0){
+          ctx.beginPath(); ctx.moveTo(e.points[0].x,e.points[0].y);
+          for(let i=1;i<e.points.length;i++) ctx.lineTo(e.points[i].x,e.points[i].y);
+          if(e.closed) ctx.closePath(); ctx.stroke();
+        }
+        break;
+      case 'TEXT':
+        ctx.save();
+        ctx.translate(e.x,e.y); ctx.rotate(e.rot||0);
+        ctx.scale(1,-1);
+        ctx.font=`${Math.max(8/jwwView.scale,e.size||12)}px sans-serif`;
+        ctx.fillText(e.str,0,0);
+        ctx.restore();
+        break;
+    }
+    ctx.restore();
+  }
+}
+
+// FIX #統合ポイント2: openJWW関数
+async function openJWW(file){
+  showEl(els.cadView);
+  showEl(els.overlay,'block');
+  const buf = await file.arrayBuffer();
+  const doc = parseJww(buf);
+  state.jwwDoc = doc;
+  state.dxf = null; // DXFビューワーは使わない
+
+  const c = els.cad;
+  const ov = els.cadOverlay;
+  // FIX #4: dprを正常値でリセット済み
+  c.width = els.cadView.clientWidth * state.dpr;
+  c.height = els.cadView.clientHeight * state.dpr;
+  ov.width = c.width;
+  ov.height = c.height;
+
+  // FIX #12: Safari初回描画でrAF待ち
+  await new Promise(r=>requestAnimationFrame(r));
+  jwwFitAndRender(doc, c);
+  setupCadMeasure();
+}
+
+function jwwFitAndRender(doc, canvas){
+  const bb = jwwBoundingBox(doc.entities);
+  const pad = 20;
+  const vw = bb.maxX - bb.minX || 1;
+  const vh = bb.maxY - bb.minY || 1;
+  const sx = (canvas.width - 2*pad) / vw;
+  const sy = (canvas.height - 2*pad) / vh;
+  const scale = Math.min(sx, sy);
+  const ox = pad - bb.minX * scale;
+  const oy = pad - bb.minY * scale;
+
+  // FIX #1: ビュー変換パラメータを保存（測定用逆変換に使用）
+  jwwView.scale = scale;
+  jwwView.ox = ox;
+  jwwView.oy = oy;
+  jwwView.canvasH = canvas.height;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(0, canvas.height);
+  ctx.scale(1, -1);
+  ctx.translate(ox, oy);
+  ctx.scale(scale, scale);
+  renderJwwToCanvas(doc, ctx, canvas);
+  ctx.restore();
+}
+
 // その他ユーティリティ
+// FIX #5: パスワード付きZIPのリトライ処理
 async function openArchive(file){
   showEl(els.list); els.list.innerHTML='展開中...';
-  const reader=new zip.ZipReader(new zip.BlobReader(file));
-  const entries=await reader.getEntries();
+  let reader;
+  try {
+    reader = new zip.ZipReader(new zip.BlobReader(file));
+    await reader.getEntries(); // パスワード不要か確認
+  } catch(e) {
+    // パスワード付きZIP処理（最大3回）
+    els.list.innerHTML='';
+    let tries = 0;
+    while(tries < 3) {
+      const pw = prompt(`ZIPパスワード (${tries+1}/3):`);
+      if(pw === null){ els.list.innerHTML='<p style="padding:20px">中止しました</p>'; return; }
+      try {
+        reader = new zip.ZipReader(new zip.BlobReader(file), {password: pw});
+        await reader.getEntries();
+        break;
+      } catch(e2) {
+        tries++;
+        if(tries >= 3){ els.list.innerHTML='<p style="padding:20px">パスワードが違います</p>'; return; }
+      }
+    }
+  }
+  const entries = await reader.getEntries();
   state.archive={reader,entries,file};
   els.list.innerHTML='';
   entries.filter(e=>!e.directory).forEach(e=>{
     const div=document.createElement('div'); div.className='list-item';
     div.innerHTML=`<span>${e.filename}</span><span class="badge">${(e.uncompressedSize/1024).toFixed(0)}KB</span>`;
     div.onclick=async()=>{
-      const blob=await e.getData(new zip.BlobWriter());
-      openFile(new File([blob], e.filename.split('/').pop()));
+      try{
+        const blob=await e.getData(new zip.BlobWriter());
+        openFile(new File([blob], e.filename.split('/').pop()));
+      }catch(err){ alert('展開エラー: '+err.message); }
     };
     els.list.appendChild(div);
   });
 }
 
 function resetViewers(){
-  if(state.url) URL.revokeObjectURL(state.url);
-  ["pdfWrap","imgView","text","cadView","list","fallback","overlay"].forEach(k=>hideEl(els[k]||document.getElementById(k)));
-  if(state.dxf) try{state.dxf.Clear()}catch(e){}
+  // FIX #10: URL解放を確実に
+  if(state.url){ URL.revokeObjectURL(state.url); state.url=null; }
+  ["pdfWrap","imgView","text","cadView","list","fallback","overlay"].forEach(k=>{
+    const el = els[k] || document.getElementById(k); if(el) hideEl(el);
+  });
+  // FIX #10: dxf.dispose確実実行
+  if(state.dxf){
+    try{ state.dxf.Dispose ? state.dxf.Dispose() : (state.dxf.Clear && state.dxf.Clear()); }catch(e){}
+    state.dxf=null;
+  }
+  state.jwwDoc = null;
   state.pdfAnnotations={};
+  state.pdfTouchBound = false;
+  state.pdfDoc = null;
+  // FIX #2: ズーム時のcadOverlayクリア
+  const ov = els.cadOverlay;
+  if(ov){ const ctx=ov.getContext('2d'); ctx.clearRect(0,0,ov.width,ov.height); }
 }
 
 function showFallback(h){ els.fallback.innerHTML=`<h3>表示エラー</h3><p>${h}</p>`; showEl(els.fallback); }
 document.getElementById('closeBtn').onclick=()=>{ els.viewer.classList.remove('show'); resetViewers(); };
 document.getElementById('backBtn').onclick=()=>{ if(state.archive){ resetViewers(); showEl(els.list); } else document.getElementById('closeBtn').click(); };
 
-document.getElementById('zoomIn').onclick=()=>{ 
-  if(els.imgView.style.display!=='none'){state.scale*=1.2;updateImgTransform()} 
-  else if(els.cadView.style.display!=='none' && state.dxf){state.dxf.Zoom(1.2)} 
-  else if(state.pdfDoc){state.pdfScale*=1.2;drawPDFPage()} 
+document.getElementById('zoomIn').onclick=()=>{
+  if(els.imgView.style.display!=='none'){ state.scale*=1.2; updateImgTransform(); }
+  else if(els.cadView.style.display!=='none'){
+    if(state.dxf){ state.dxf.Zoom(1.2); }
+    else if(state.jwwDoc){
+      // FIX #1: JWW拡大後にoverlayクリアして再描画
+      const ov=els.cadOverlay; ov.getContext('2d').clearRect(0,0,ov.width,ov.height);
+      jwwView.scale *= 1.2;
+      jwwView.ox = els.cad.width/2 - (els.cad.width/2 - jwwView.ox) * 1.2;
+      jwwView.oy = els.cad.height/2 - (els.cad.height/2 - jwwView.oy) * 1.2;
+      jwwApplyView(state.jwwDoc, els.cad);
+    }
+  }
+  else if(state.pdfDoc){ state.pdfScale*=1.2; drawPDFPage(); }
 };
-document.getElementById('zoomOut').onclick=()=>{ 
-  if(els.imgView.style.display!=='none'){state.scale/=1.2;updateImgTransform()} 
-  else if(els.cadView.style.display!=='none' && state.dxf){state.dxf.Zoom(0.8)} 
-  else if(state.pdfDoc){state.pdfScale/=1.2;drawPDFPage()} 
+document.getElementById('zoomOut').onclick=()=>{
+  if(els.imgView.style.display!=='none'){ state.scale/=1.2; updateImgTransform(); }
+  else if(els.cadView.style.display!=='none'){
+    if(state.dxf){ state.dxf.Zoom(0.8); }
+    else if(state.jwwDoc){
+      const ov=els.cadOverlay; ov.getContext('2d').clearRect(0,0,ov.width,ov.height);
+      jwwView.scale /= 1.2;
+      jwwView.ox = els.cad.width/2 - (els.cad.width/2 - jwwView.ox) / 1.2;
+      jwwView.oy = els.cad.height/2 - (els.cad.height/2 - jwwView.oy) / 1.2;
+      jwwApplyView(state.jwwDoc, els.cad);
+    }
+  }
+  else if(state.pdfDoc){ state.pdfScale/=1.2; drawPDFPage(); }
 };
+
+// JWWズーム後の再描画（保存済みvwView使用）
+function jwwApplyView(doc, canvas){
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(0, canvas.height);
+  ctx.scale(1, -1);
+  ctx.translate(jwwView.ox, jwwView.oy);
+  ctx.scale(jwwView.scale, jwwView.scale);
+  renderJwwToCanvas(doc, ctx, canvas);
+  ctx.restore();
+}
 
 function updateImgTransform(){ els.img.style.transform=`translate(${state.imgX}px,${state.imgY}px) scale(${state.scale})`; }
 function enableImagePanZoom(){
@@ -332,7 +707,25 @@ function enableImagePanZoom(){
   els.imgView.onpointerup=()=>pan=false;
 }
 
-async function saveRecent(file){ if(!db||file.size>10*1024*1024) return; const tx=db.transaction('recents','readwrite'); tx.objectStore('recents').add({name:file.name,blob:file,ts:Date.now()}); loadRecents(); }
+// FIX #6: IndexedDB 5MB制限・最大10件・古いものから削除
+async function saveRecent(file){
+  if(!db || file.size > 5*1024*1024) return;
+  const tx = db.transaction('recents','readwrite');
+  const store = tx.objectStore('recents');
+  store.add({name:file.name, blob:file, ts:Date.now()});
+  // 古いもの削除（10件超過分）
+  const allReq = store.getAll();
+  allReq.onsuccess = ()=>{
+    const items = allReq.result.sort((a,b)=>a.ts-b.ts);
+    if(items.length > 10){
+      const toDelete = items.slice(0, items.length - 10);
+      const tx2 = db.transaction('recents','readwrite');
+      toDelete.forEach(it => tx2.objectStore('recents').delete(it.id));
+    }
+  };
+  loadRecents();
+}
+
 async function loadRecents(){
   if(!db) return;
   const req=db.transaction('recents','readonly').objectStore('recents').getAll();

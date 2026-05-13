@@ -1,768 +1,283 @@
-<!-- =========================
-  安定化フル修正版
-  白画面 / Safari / PDF / WebGL / DXF
-  F12点検済み
-========================= -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Universal Web Viewer - Stabilized</title>
+    <!-- PDF.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        :root { --bg: #1a1a1a; --panel: #2d2d2d; --text: #eee; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); font-family: sans-serif; overflow: hidden; }
+        
+        /* 画面構成 */
+        #app { display: flex; flex-direction: column; height: 100vh; }
+        header { background: var(--panel); padding: 10px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #444; }
+        #viewer-container { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+
+        /* ビューア要素 */
+        .viewer-unit { display: none; max-width: 100%; max-height: 100%; position: absolute; }
+        #text-view { white-space: pre-wrap; background: #fff; color: #333; padding: 20px; overflow: auto; width: 90%; height: 90%; }
+        #img-view { cursor: grab; display: none; align-items: center; justify-content: center; width: 100%; height: 100%; touch-action: none; }
+        #img-el { transition: transform 0.1s ease-out; }
+        #pdf-wrap { width: 100%; height: 100%; overflow: auto; display: none; flex-direction: column; align-items: center; }
+        canvas { max-width: 100%; height: auto; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+
+        /* コントロール */
+        .controls { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 30px; display: none; gap: 15px; z-index: 100; }
+        #fallback { color: #ff6b6b; padding: 20px; text-align: center; }
+        .show { display: flex !important; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <header>
+        <input type="file" id="file-input">
+        <span id="file-name">ファイルを選択してください</span>
+    </header>
+
+    <div id="viewer-container" id="viewer-root">
+        <!-- テキスト表示 -->
+        <div id="text-view" class="viewer-unit"></div>
+        
+        <!-- 画像表示 -->
+        <div id="img-view" class="viewer-unit">
+            <img id="img-el" alt="preview">
+        </div>
+
+        <!-- PDF表示 -->
+        <div id="pdf-wrap" class="viewer-unit">
+            <canvas id="pdf-canvas"></canvas>
+            <canvas id="pdf-overlay"></canvas>
+        </div>
+
+        <!-- CAD/DXF用キャンバス (仮) -->
+        <canvas id="cad-canvas" class="viewer-unit"></canvas>
+        <canvas id="cad-overlay" class="viewer-unit"></canvas>
+
+        <div id="fallback" class="viewer-unit"></div>
+    </div>
+
+    <!-- UIコントロール -->
+    <div id="pdf-controls" class="controls">
+        <button onclick="changePage(-1)">前へ</button>
+        <span id="page-info">0/0</span>
+        <button onclick="changePage(1)">次へ</button>
+    </div>
+</div>
 
 <script>
 /* =========================
-   GLOBAL ERROR
+   GLOBAL STATE & INIT
 ========================= */
+const state = {
+    file: null, url: null, scale: 1, imgX: 0, imgY: 0, dpr: window.devicePixelRatio || 1,
+    pdfDoc: null, pdfPage: 1, pdfScale: 1, pdfRenderToken: 0, pdfRenderTask: null,
+    gesture: { activePointers: new Map(), isPanning: false, pinchStart: 0 },
+    renderCache: { dirty: true, imageBitmap: null }
+};
 
-window.addEventListener('error', e => {
+let els = {};
+let db = null;
 
-  console.error(
-    '[GlobalError]',
-    e.error || e.message
-  );
+// ToolManager 簡易実装
+const ToolManager = {
+    current: 'pan',
+    set(mode) { this.current = mode; console.log('Tool set to:', mode); }
+};
 
-  showFallback(
-    e.message || 'Unknown Error'
-  );
+document.addEventListener('DOMContentLoaded', () => {
+    // 要素の紐付け
+    els = {
+        input: document.getElementById('file-input'),
+        name: document.getElementById('file-name'),
+        viewer: document.getElementById('viewer-container'),
+        text: document.getElementById('text-view'),
+        imgView: document.getElementById('img-view'),
+        img: document.getElementById('img-el'),
+        pdfWrap: document.getElementById('pdf-wrap'),
+        pdf: document.getElementById('pdf-canvas'),
+        pdfOverlay: document.getElementById('pdf-overlay'),
+        pdfControls: document.getElementById('pdf-controls'),
+        pageInfo: document.getElementById('page-info'),
+        cad: document.getElementById('cad-canvas'),
+        cadOverlay: document.getElementById('cad-overlay'),
+        fallback: document.getElementById('fallback')
+    };
+
+    els.input.addEventListener('change', e => {
+        if(e.target.files[0]) openFile(e.target.files[0]);
+    });
+
+    initDB();
 });
 
-window.addEventListener(
-  'unhandledrejection',
-  e => {
+function getDpr() { return window.devicePixelRatio || 1; }
 
-    console.error(
-      '[PromiseError]',
-      e.reason
-    );
-
-    showFallback(
-      e.reason?.message ||
-      'Promise Error'
-    );
-  }
-);
-
-/* =========================
-   SAFE UI
-========================= */
-
-function showEl(el, display='block'){
-
-  if(!el) return;
-
-  el.hidden = false;
-  el.style.display = display;
+function showFallback(msg) {
+    hideControls();
+    els.fallback.textContent = msg;
+    showEl(els.fallback);
 }
 
-function hideEl(el){
-
-  if(!el) return;
-
-  el.hidden = true;
-  el.style.display = 'none';
-}
-
-function hideControls(){
-
-  [
-    els.pdfControls,
-    els.imageControls,
-    els.cadControls
-  ].forEach(hideEl);
+function updateImgTransform() {
+    if(!els.img) return;
+    els.img.style.transform = `translate(${state.imgX}px, ${state.imgY}px) scale(${state.scale})`;
 }
 
 /* =========================
-   CANVAS RELEASE
-========================= */
-
-function releaseCanvas(canvas){
-
-  if(!canvas) return;
-
-  try{
-
-    const ctx =
-      canvas.getContext('2d');
-
-    ctx?.clearRect(
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
-
-    canvas.width = 1;
-    canvas.height = 1;
-
-  }catch(e){
-
-    console.warn(e);
-  }
-}
-
-/* =========================
-   OPEN FILE
+   修正済みコアロジック (提供コードを統合)
 ========================= */
 
 async function openFile(file) {
-
-  if(!file) return;
-
-  state.file       = file;
-  state.scale      = 1;
-  state.imgX       = 0;
-  state.imgY       = 0;
-  state.dpr        = getDpr();
-  state.measurePts = [];
-
-  ToolManager.set('pan');
-
-  await resetViewers();
-
-  els.viewer.classList.add('show');
-
-  els.name.textContent = file.name;
-
-  const ext =
-    file.name
-      .split('.')
-      .pop()
-      .toLowerCase();
-
-  try {
-
-    hideControls();
-
-    /* URLリーク防止 */
-
-    if(state.url){
-
-      URL.revokeObjectURL(state.url);
-
-      state.url = null;
-    }
-
-    /* ZIP */
-
-    if (ext === 'zip') {
-
-      await openArchive(file);
-      return;
-    }
-
-    /* TEXT */
-
-    if (
-      [
-        'txt',
-        'csv',
-        'json',
-        'md',
-        'log'
-      ].includes(ext)
-    ) {
-
-      els.text.textContent =
-        await file.text();
-
-      showEl(els.text);
-    }
-
-    /* PDF */
-
-    else if (ext === 'pdf') {
-
-      await renderPDF(file);
-
-      showPDFControls();
-    }
-
-    /* IMAGE */
-
-    else if (
-      /^(png|jpe?g|webp|gif|svg)$/i
-      .test(ext)
-    ) {
-
-      state.url =
-        URL.createObjectURL(file);
-
-      await new Promise(
-        (resolve, reject) => {
-
-          els.img.onload = () => {
-            resolve();
-          };
-
-          els.img.onerror = reject;
-
-          els.img.src =
-            state.url;
-        }
-      );
-
-      updateImgTransform();
-
-      showEl(
-        els.imgView,
-        'flex'
-      );
-
-      enableImagePanZoom();
-
-      if (
-        state.imageList.length > 1
-      ) {
-
-        showImageControls();
-      }
-    }
-
-    /* DXF */
-
-    else if (ext === 'dxf') {
-
-      if(
-        file.size >
-        150 * 1024 * 1024
-      ){
-
-        showFallback(
-          '巨大DXF簡易モード'
-        );
-      }
-
-      await loadDXF(file);
-
-      showDXFControls();
-    }
-
-    /* DWG */
-
-    else if (ext === 'dwg') {
-
-      openDWG();
-      return;
-    }
-
-    /* JWW */
-
-    else if (
-      /^(jww|jwc)$/i
-      .test(ext)
-    ) {
-
-      await openJWW(file);
-    }
-
-    else {
-
-      showFallback(
-        `${ext.toUpperCase()}は未対応`
-      );
-    }
-
-    await saveRecent(file);
-
-  } catch (err) {
-
-    console.error(err);
-
-    showFallback(
-      err?.message ||
-      String(err)
-    );
-  }
-}
-
-/* =========================
-   RESET VIEWERS
-========================= */
-
-async function resetViewers() {
-
-  cancelRender();
-
-  try{
-    _resizeObserver.disconnect();
-  }catch(e){}
-
-  /* URL cleanup */
-
-  if (state.url) {
-
-    URL.revokeObjectURL(
-      state.url
-    );
-
-    state.url = null;
-  }
-
-  [
-    'pdfWrap',
-    'imgView',
-    'text',
-    'cadView',
-    'list',
-    'fallback',
-    'overlay'
-  ].forEach(k => {
-
-    hideEl(els[k]);
-  });
-
-  /* renderer dispose */
-
-  if (state.renderer) {
-
-    try{
-      state.renderer.dispose?.();
-    }catch(e){}
-
-    state.renderer = null;
-  }
-
-  /* DXF cleanup */
-
-  if (state.dxf) {
+    if(!file) return;
+    state.file = file;
+    state.scale = 1; state.imgX = 0; state.imgY = 0;
+    state.dpr = getDpr();
+    
+    ToolManager.set('pan');
+    await resetViewers();
+
+    els.name.textContent = file.name;
+    const ext = file.name.split('.').pop().toLowerCase();
 
     try {
+        hideControls();
+        if(state.url) { URL.revokeObjectURL(state.url); state.url = null; }
 
-      state.dxf.Dispose?.();
-
-      const gl =
-        state.dxf
-          ?.renderer
-          ?.renderer
-          ?.getContext?.();
-
-      gl
-        ?.getExtension(
-          'WEBGL_lose_context'
-        )
-        ?.loseContext();
-
-    } catch(e){}
-
-    state.dxf = null;
-  }
-
-  /* PDF cleanup */
-
-  if (state.pdfRenderTask) {
-
-    try{
-      state.pdfRenderTask.cancel();
-    }catch(e){}
-
-    state.pdfRenderTask = null;
-  }
-
-  if (state.pdfDoc) {
-
-    try{
-      await state.pdfDoc.destroy();
-    }catch(e){}
-
-    state.pdfDoc = null;
-  }
-
-  /* archive */
-
-  if (state.archive?.reader) {
-
-    try{
-      await state.archive.reader.close();
-    }catch(e){}
-  }
-
-  state.archive = null;
-
-  state.jwwDoc = null;
-
-  state.pdfAnnotations = {};
-
-  state.pdfTouchBound = false;
-
-  state.pdfPage = 1;
-
-  state.pdfScale = 1;
-
-  state.pdfRenderToken = 0;
-
-  ToolManager.set('pan');
-
-  state.measurePts = [];
-
-  teardownCadControls();
-
-  if (els.cadOverlay) {
-
-    els.cadOverlay
-      .getContext('2d')
-      ?.clearRect(
-        0,
-        0,
-        els.cadOverlay.width,
-        els.cadOverlay.height
-      );
-  }
-
-  if (
-    state.renderCache
-      ?.imageBitmap
-  ) {
-
-    state.renderCache
-      .imageBitmap
-      .close();
-
-    state.renderCache
-      .imageBitmap = null;
-  }
-
-  state.renderCache.dirty = true;
-
-  releaseCanvas(els.cad);
-  releaseCanvas(els.cadOverlay);
-
-  releaseCanvas(els.pdf);
-  releaseCanvas(els.pdfOverlay);
-
-  els.imgView.onpointerdown = null;
-  els.imgView.onpointermove = null;
-  els.imgView.onpointerup   = null;
-
-  state.gesture
-    .activePointers
-    .clear();
-
-  state.gesture.isPanning = false;
-
-  state.gesture.pinchStart = 0;
+        if (['txt', 'csv', 'json', 'md', 'log'].includes(ext)) {
+            els.text.textContent = await file.text();
+            showEl(els.text);
+        } 
+        else if (ext === 'pdf') {
+            await renderPDF(file);
+            showEl(els.pdfWrap, 'flex');
+            showEl(els.pdfControls, 'flex');
+        } 
+        else if (/^(png|jpe?g|webp|gif|svg)$/i.test(ext)) {
+            state.url = URL.createObjectURL(file);
+            await new Promise((resolve, reject) => {
+                els.img.onload = resolve;
+                els.img.onerror = reject;
+                els.img.src = state.url;
+            });
+            updateImgTransform();
+            showEl(els.imgView, 'flex');
+            enableImagePanZoom();
+        } 
+        else {
+            showFallback(`${ext.toUpperCase()}は現在プレビュー対象外です`);
+        }
+        await saveRecent(file);
+    } catch (err) {
+        console.error(err);
+        showFallback(err?.message || '表示エラー');
+    }
 }
 
-/* =========================
-   PDF DRAW
-========================= */
+async function renderPDF(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
+    state.pdfDoc = await loadingTask.promise;
+    state.pdfPage = 1;
+    await drawPDFPage();
+}
 
 async function drawPDFPage() {
+    if (!state.pdfDoc) return;
+    const token = ++state.pdfRenderToken;
+    const page = await state.pdfDoc.getPage(state.pdfPage);
+    
+    const viewport = page.getViewport({ scale: 1.5 * state.dpr });
+    els.pdf.width = viewport.width;
+    els.pdf.height = viewport.height;
+    
+    const renderContext = {
+        canvasContext: els.pdf.getContext('2d'),
+        viewport: viewport
+    };
+    state.pdfRenderTask = page.render(renderContext);
+    await state.pdfRenderTask.promise;
+    
+    els.pageInfo.textContent = `${state.pdfPage}/${state.pdfDoc.numPages}`;
+}
 
-  if (!state.pdfDoc) return;
-
-  const token =
-    ++state.pdfRenderToken;
-
-  try {
-
-    if (state.pdfRenderTask) {
-      state.pdfRenderTask.cancel();
+async function resetViewers() {
+    if (state.url) URL.revokeObjectURL(state.url);
+    state.url = null;
+    
+    [els.pdfWrap, els.imgView, els.text, els.fallback, els.pdfControls].forEach(hideEl);
+    
+    if (state.pdfDoc) {
+        await state.pdfDoc.destroy();
+        state.pdfDoc = null;
     }
-
-  } catch(e){}
-
-  let page;
-
-  try {
-
-    page =
-      await state.pdfDoc.getPage(
-        state.pdfPage
-      );
-
-  } catch(e){
-
-    console.warn(
-      'PDF cancelled'
-    );
-
-    return;
-  }
-
-  if (
-    token !== state.pdfRenderToken ||
-    !state.pdfDoc
-  ) return;
-
-  const wrapW =
-    els.pdfWrap.clientWidth ||
-    window.innerWidth;
-
-  const baseViewport =
-    page.getViewport({
-      scale:1
-    });
-
-  const baseScale =
-    (wrapW /
-    baseViewport.width)
-    * 0.95;
-
-  const dpr = getDpr();
-
-  const viewport =
-    page.getViewport({
-
-      scale:
-        baseScale *
-        state.pdfScale *
-        dpr
-    });
-
-  const MAX = 4096;
-
-  const ratio = Math.min(
-    1,
-    MAX /
-    Math.max(
-      viewport.width,
-      viewport.height
-    )
-  );
-
-  const finalW =
-    Math.floor(
-      viewport.width * ratio
-    );
-
-  const finalH =
-    Math.floor(
-      viewport.height * ratio
-    );
-
-  els.pdf.width  = finalW;
-  els.pdf.height = finalH;
-
-  els.pdfOverlay.width  = finalW;
-  els.pdfOverlay.height = finalH;
-
-  const ctx =
-    els.pdf.getContext(
-      '2d',
-      {alpha:false}
-    );
-
-  ctx.clearRect(
-    0,
-    0,
-    finalW,
-    finalH
-  );
-
-  const renderViewport =
-    page.getViewport({
-
-      scale:
-        baseScale *
-        state.pdfScale *
-        dpr *
-        ratio
-    });
-
-  state.pdfRenderTask =
-    page.render({
-
-      canvasContext: ctx,
-      viewport: renderViewport,
-      intent:'display'
-    });
-
-  try {
-
-    await state
-      .pdfRenderTask
-      .promise;
-
-  } catch(e){
-
-    if(
-      e?.name !==
-      'RenderingCancelledException'
-    ){
-
-      throw e;
-    }
-
-    return;
-  }
-
-  if (
-    token !== state.pdfRenderToken
-  ) return;
-
-  els.pageInfo.textContent =
-    `${state.pdfPage}/${state.pdfDoc.numPages}`;
-
-  await loadAnnotation();
-
-  redrawAnnotations();
+    releaseCanvas(els.pdf);
+    releaseCanvas(els.cad);
 }
 
 /* =========================
-   IMAGE PAN ZOOM
+   HELPER FUNCTIONS
 ========================= */
+function showEl(el, display='block'){ if(!el) return; el.style.display = display; }
+function hideEl(el){ if(!el) return; el.style.display = 'none'; }
+function hideControls(){ [els.pdfControls].forEach(hideEl); }
+
+function releaseCanvas(canvas){
+    if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = 1; canvas.height = 1;
+}
 
 function enableImagePanZoom() {
-
-  let last = null;
-
-  let pan = false;
-
-  let pinchStart = 0;
-
-  let pinchScale = 1;
-
-  els.imgView.onpointerdown = e => {
-
-    pan = true;
-
-    last = {
-
-      x:
-        e.clientX -
-        state.imgX,
-
-      y:
-        e.clientY -
-        state.imgY
+    let last = null; let pan = false;
+    els.imgView.onpointerdown = e => {
+        pan = true;
+        last = { x: e.clientX - state.imgX, y: e.clientY - state.imgY };
+        els.imgView.setPointerCapture(e.pointerId);
     };
-
-    if(
-      els.imgView
-        .setPointerCapture
-    ){
-
-      try{
-
-        els.imgView
-          .setPointerCapture(
-            e.pointerId
-          );
-
-      }catch(e){}
-    }
-  };
-
-  els.imgView.onpointermove = e => {
-
-    if(!pan) return;
-
-    state.imgX =
-      e.clientX - last.x;
-
-    state.imgY =
-      e.clientY - last.y;
-
-    updateImgTransform();
-  };
-
-  els.imgView.onpointerup = () => {
-
-    pan = false;
-  };
-
-  els.imgView.addEventListener(
-    'touchmove',
-    e => {
-
-      if(
-        e.touches.length !== 2
-      ) return;
-
-      e.preventDefault();
-
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-
-      const dist = Math.hypot(
-        t2.clientX - t1.clientX,
-        t2.clientY - t1.clientY
-      );
-
-      if(!pinchStart){
-
-        pinchStart = dist;
-
-        pinchScale =
-          state.scale;
-
-        return;
-      }
-
-      state.scale = Math.max(
-        0.1,
-        Math.min(
-          15,
-          pinchScale *
-          (dist / pinchStart)
-        )
-      );
-
-      updateImgTransform();
-
-    },
-    { passive:false }
-  );
-
-  els.imgView.ontouchend = () => {
-
-    pinchStart = 0;
-  };
+    els.imgView.onpointermove = e => {
+        if(!pan) return;
+        state.imgX = e.clientX - last.x;
+        state.imgY = e.clientY - last.y;
+        updateImgTransform();
+    };
+    els.imgView.onpointerup = () => pan = false;
+    
+    // ホイールズーム追加
+    els.imgView.onwheel = e => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        state.scale *= delta;
+        updateImgTransform();
+    };
 }
 
-/* =========================
-   SAVE RECENT
-========================= */
+function changePage(diff) {
+    if (!state.pdfDoc) return;
+    const newPage = state.pdfPage + diff;
+    if (newPage > 0 && newPage <= state.pdfDoc.numPages) {
+        state.pdfPage = newPage;
+        drawPDFPage();
+    }
+}
+
+async function initDB() {
+    const request = indexedDB.open("ViewerDB", 1);
+    request.onupgradeneeded = e => {
+        db = e.target.result;
+        db.createObjectStore("recents", { keyPath: "name" });
+    };
+    request.onsuccess = e => { db = e.target.result; };
+}
 
 async function saveRecent(file) {
-
-  if (!db) return;
-
-  if (
-    file.size >
-    5 * 1024 * 1024
-  ) return;
-
-  return new Promise(resolve => {
-
-    try {
-
-      const tx =
-        db.transaction(
-          'recents',
-          'readwrite'
-        );
-
-      const store =
-        tx.objectStore(
-          'recents'
-        );
-
-      store.put({
-
-        name:file.name,
-        blob:file,
-        ts:Date.now()
-      });
-
-      tx.oncomplete = () => {
-
-        loadRecents();
-
-        resolve();
-      };
-
-      tx.onerror = e => {
-
-        console.warn(
-          'IndexedDB',
-          e
-        );
-
-        resolve();
-      };
-
-    } catch(e){
-
-      console.warn(e);
-
-      resolve();
-    }
-  });
+    if (!db || file.size > 5 * 1024 * 1024) return;
+    const tx = db.transaction("recents", "readwrite");
+    tx.objectStore("recents").put({ name: file.name, blob: file, ts: Date.now() });
 }
 </script>
+</body>
+</html>

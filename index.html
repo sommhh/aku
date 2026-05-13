@@ -1,929 +1,679 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>現場万能ビューワー Pro v4</title>
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#0a84ff">
-<style>
-:root{--bg:#f6f7f9;--card:#fff;--fg:#111;--muted:#666;--accent:#0a84ff;--border:#e5e7eb}
-@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--fg:#f2f2f7;--muted:#8e8e93;--border:#38383a}}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif}
-.toolbar{padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top));background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;position:absolute;top:0;width:100%;z-index:100}
-.dropzone{height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px;padding-top:60px;overflow:auto}
-.drop-card{background:var(--card);border:2px dashed var(--border);border-radius:28px;padding:28px 20px;text-align:center;width:100%;max-width:520px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
-.primary{margin-top:14px;background:var(--accent);color:#fff;border:none;border-radius:14px;padding:14px 22px;font-size:16px;font-weight:700;width:100%}
-.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:10px;padding:6px 10px;font-size:14px;min-width:34px;cursor:pointer}
-.secondary.active{background:var(--accent);color:#fff}
-#viewer{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;flex-direction:column;opacity:0;pointer-events:none;visibility:hidden;transition:.15s}
-#viewer.show{opacity:1;pointer-events:auto;visibility:visible}
-.content{flex:1;position:relative;overflow:hidden;margin-top:calc(48px + env(safe-area-inset-top))}
-.pdf-wrap{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:auto}
-#pdfCanvas{background:#fff;max-width:100%;max-height:100%;object-fit:contain}
-#pdfOverlay{position:absolute;pointer-events:none;max-width:100%;max-height:100%}
-.img-wrap{width:100%;height:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;touch-action:none}
-#imgEl{max-width:none;will-change:transform;transform-origin:0 0}
-#cadCanvas,#cadOverlay{position:absolute;top:0;left:0;width:100%;height:100%}
-#cadOverlay{pointer-events:none}
-#cadView{touch-action:none}
-pre{margin:0;padding:16px;overflow:auto;font-size:13px;white-space:pre-wrap;word-break:break-all;height:100%;background:var(--card)}
-.info-overlay{position:fixed;left:12px;bottom:calc(12px + env(safe-area-inset-bottom));background:rgba(0,0,0,.72);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;pointer-events:none;z-index:500}
-.list{padding:12px;overflow:auto;height:100%}
-.list-item{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid var(--border);background:var(--card);border-radius:12px;margin-bottom:8px;cursor:pointer}
-.badge{font-size:11px;color:var(--muted);background:var(--bg);padding:2px 6px;border-radius:6px}
-.recent-item{display:flex;align-items:center;gap:10px;padding:10px;background:var(--card);border-radius:12px;margin-bottom:6px;cursor:pointer;border:1px solid var(--border)}
-</style>
-</head>
-<body>
-
-<main id="drop" class="dropzone">
-  <div class="drop-card">
-    <div style="font-size:44px">📦</div>
-    <h2 style="margin:6px 0">現場万能ビューワー Pro v4</h2>
-    <p style="color:var(--muted);font-size:13px;margin:0">PDF赤ペン・DXF/JWW距離・パン/ピンチ対応</p>
-    <button class="primary" id="pickBtn">ファイルを選択</button>
-    <input id="fileInput" type="file" hidden multiple
-      accept=".pdf,.dxf,.dwg,.jww,.jwc,.png,.jpg,.jpeg,.webp,.gif,.svg,.txt,.csv,.json,.md,.log,.zip">
-  </div>
-  <div id="recentList" style="width:100%;max-width:520px;margin-top:16px"></div>
-</main>
-
-<section id="viewer">
-  <div class="toolbar">
-    <button id="backBtn" style="border:none;background:none;font-size:22px">‹</button>
-    <button id="closeBtn" style="border:none;background:none;font-size:22px">✕</button>
-    <div id="fileName" style="flex:1;text-align:center;font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
-    <button id="penBtn" class="secondary" style="display:none">✏️</button>
-    <button id="measureBtn" class="secondary" style="display:none" title="距離測定">📏</button>
-    <button id="pagePrev" class="secondary" style="display:none">◀</button>
-    <span id="pageInfo" style="font-size:11px;min-width:40px;text-align:center;display:none"></span>
-    <button id="pageNext" class="secondary" style="display:none">▶</button>
-    <button id="zoomOut" class="secondary">－</button>
-    <button id="zoomIn" class="secondary">＋</button>
-  </div>
-  <div class="content">
-    <div id="pdfWrap" class="pdf-wrap" style="display:none"><canvas id="pdfCanvas"></canvas><canvas id="pdfOverlay"></canvas></div>
-    <div id="imgView" class="img-wrap" style="display:none"><img id="imgEl"></div>
-    <pre id="textView" style="display:none"></pre>
-    <div id="cadView" style="display:none;position:relative;width:100%;height:100%">
-      <canvas id="cadCanvas"></canvas><canvas id="cadOverlay"></canvas>
-    </div>
-    <div id="listView" class="list" style="display:none"></div>
-    <div id="fallbackView" style="display:none;padding:40px;text-align:center"></div>
-  </div>
-  <div id="coordOverlay" class="info-overlay" style="display:none"></div>
-</section>
-
-<script src="https://unpkg.com/dxf-viewer@1.0.6/dist/dxf-viewer.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.29/dist/zip.min.js"></script>
+<!-- ▼ openFile 修正版（await resetViewers対応・競合防止） -->
 <script>
-'use strict';
-pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
-// ─────────────────────────────────────────────
-// ① state（v4版）
-// ─────────────────────────────────────────────
-const getDpr = () => Math.min(window.devicePixelRatio || 1, 2);
-
-const state = {
-  // 共通
-  file:null, url:null, archive:null,
-  dpr: getDpr(),
-  imageList:[], imageIndex:0,
-  // PDF
-  pdfDoc:null, pdfPage:1, pdfScale:1,
-  pdfAnnotations:{}, isDrawing:false, pdfTouchBound:false,
-  // 画像パン
-  scale:1, imgX:0, imgY:0,
-  // DXF
-  dxf:null,
-  // JWW
-  jwwDoc:null,
-  // v4 新規
-  renderer: null,
-  activeTool: 'pan',   // 'pan' | 'measure'
-  view:  { scale:1, x:0, y:0 },
-  world: { minX:0, minY:0, maxX:1, maxY:1 },
-  gesture: {
-    isPanning:false, startX:0, startY:0,
-    pinchStart:0, pinchScale:1, lastTap:0,
-    activePointers: new Map()
-  },
-  renderCache: { baseCanvas:null, baseCtx:null, dirty:true },
-  measurePts: []
-};
-
-const els = {
-  fileInput:   document.getElementById('fileInput'),
-  viewer:      document.getElementById('viewer'),
-  name:        document.getElementById('fileName'),
-  pdfWrap:     document.getElementById('pdfWrap'),
-  pdf:         document.getElementById('pdfCanvas'),
-  pdfOverlay:  document.getElementById('pdfOverlay'),
-  img:         document.getElementById('imgEl'),
-  imgView:     document.getElementById('imgView'),
-  text:        document.getElementById('textView'),
-  cad:         document.getElementById('cadCanvas'),
-  cadOverlay:  document.getElementById('cadOverlay'),
-  cadView:     document.getElementById('cadView'),
-  list:        document.getElementById('listView'),
-  fallback:    document.getElementById('fallbackView'),
-  overlay:     document.getElementById('coordOverlay'),
-  pagePrev:    document.getElementById('pagePrev'),
-  pageNext:    document.getElementById('pageNext'),
-  pageInfo:    document.getElementById('pageInfo'),
-  penBtn:      document.getElementById('penBtn'),
-  measureBtn:  document.getElementById('measureBtn'),
-  recentList:  document.getElementById('recentList')
-};
-
-const hideEl = el => { if(el) el.style.display='none'; };
-const showEl = (el,type='block') => { if(el) el.style.display=type; };
-
-// ─────────────────────────────────────────────
-// ② ToolManager
-// ─────────────────────────────────────────────
-const ToolManager = {
-  set(tool){ state.activeTool = tool; },
-  is(tool){ return state.activeTool === tool; }
-};
-
-// ─────────────────────────────────────────────
-// ③ BaseRenderer
-// ─────────────────────────────────────────────
-class BaseRenderer {
-  constructor(canvas){
-    this.canvas = canvas;
-    this.ctx    = canvas.getContext('2d');
-  }
-  resize(w,h){ this.canvas.width=w; this.canvas.height=h; }
-  worldToScreen(x,y){
-    return { x: x*state.view.scale + state.view.x,
-             y: y*state.view.scale + state.view.y };
-  }
-  screenToWorld(sx,sy){
-    return { x:(sx-state.view.x)/state.view.scale,
-             y:(sy-state.view.y)/state.view.scale };
-  }
-  clear(){ this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height); }
-  // サブクラス実装
-  render(){}
-  fit(){}
-}
-
-// ─────────────────────────────────────────────
-// ④ JWWRenderer
-// ─────────────────────────────────────────────
-class JWWRenderer extends BaseRenderer {
-  constructor(canvas, doc){
-    super(canvas);
-    this.doc = doc;
-    // Offscreenキャッシュ用
-    const bc = document.createElement('canvas');
-    state.renderCache.baseCanvas = bc;
-    state.renderCache.baseCtx    = bc.getContext('2d');
-  }
-
-  fit(){
-    const bb = jwwBoundingBox(this.doc.entities);
-    state.world = bb;
-    const vw = (bb.maxX - bb.minX) || 1;
-    const vh = (bb.maxY - bb.minY) || 1;
-    const pad = 40;
-    const sx = (this.canvas.width  - pad*2) / vw;
-    const sy = (this.canvas.height - pad*2) / vh;
-    state.view.scale = Math.min(sx, sy);
-    state.view.x = pad - bb.minX * state.view.scale;
-    // CAD Y軸は上向き→Canvas下向き。view.y = canvas.height - pad + bb.minY*scale
-    state.view.y = this.canvas.height - pad + bb.minY * state.view.scale;
-    state.renderCache.dirty = true;
-    this.render();
-  }
-
-  rebuildCache(){
-    const bc   = state.renderCache.baseCanvas;
-    const bctx = state.renderCache.baseCtx;
-    bc.width  = this.canvas.width;
-    bc.height = this.canvas.height;
-    bctx.clearRect(0, 0, bc.width, bc.height);
-    bctx.save();
-    // view.x,view.y は「screen座標上での原点位置（Y反転込み）」
-    bctx.translate(state.view.x, state.view.y);
-    bctx.scale(state.view.scale, -state.view.scale);
-    jwwDrawEntities(this.doc, bctx);
-    bctx.restore();
-    state.renderCache.dirty = false;
-  }
-
-  render(){
-    if(state.renderCache.dirty) this.rebuildCache();
-    this.clear();
-    this.ctx.drawImage(state.renderCache.baseCanvas, 0, 0);
-  }
-}
-
-// ─────────────────────────────────────────────
-// ⑤ JWWパン・ピンチ・ダブルタップ（addEventListener統一）
-// ─────────────────────────────────────────────
-function setupCadControls(){
-  const cv = els.cadView;
-  // 二重登録防止
-  if(cv._cadControlsSetup) return;
-  cv._cadControlsSetup = true;
-
-  // ── Pointer（パン・測定）──
-  const onPD = e => {
-    e.preventDefault();
-    state.gesture.activePointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
-    if(state.gesture.activePointers.size===1 && ToolManager.is('pan')){
-      state.gesture.isPanning = true;
-      state.gesture.startX = e.clientX;
-      state.gesture.startY = e.clientY;
-    }
-  };
-  const onPM = e => {
-    e.preventDefault();
-    state.gesture.activePointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
-    if(!state.gesture.isPanning) return;
-    if(state.gesture.activePointers.size > 1) return; // ピンチ中はpan抑制
-    const dx = (e.clientX - state.gesture.startX) * state.dpr;
-    const dy = (e.clientY - state.gesture.startY) * state.dpr;
-    state.view.x += dx;
-    state.view.y += dy;
-    state.gesture.startX = e.clientX;
-    state.gesture.startY = e.clientY;
-    state.renderCache.dirty = true;
-    state.renderer.render();
-  };
-  const onPU = e => {
-    state.gesture.activePointers.delete(e.pointerId);
-    if(state.gesture.activePointers.size === 0) state.gesture.isPanning = false;
-  };
-
-  cv.addEventListener('pointerdown', onPD);
-  cv.addEventListener('pointermove', onPM);
-  cv.addEventListener('pointerup',   onPU);
-  cv.addEventListener('pointercancel', onPU);
-
-  // ── Touch（ピンチズーム・ダブルタップFit）──
-  const onTM = e => {
-    if(e.touches.length !== 2) return;
-    e.preventDefault();
-    const t1 = e.touches[0], t2 = e.touches[1];
-    const dist = Math.hypot(t2.clientX-t1.clientX, t2.clientY-t1.clientY);
-    if(!state.gesture.pinchStart){
-      state.gesture.pinchStart = dist;
-      state.gesture.pinchScale = state.view.scale;
-      return;
-    }
-    const ratio = dist / state.gesture.pinchStart;
-    const newScale = state.gesture.pinchScale * ratio;
-    // ピンチ中心点（screen）を基準にズーム
-    const cx = ((t1.clientX + t2.clientX)/2 - els.cadView.getBoundingClientRect().left) * state.dpr;
-    const cy = ((t1.clientY + t2.clientY)/2 - els.cadView.getBoundingClientRect().top ) * state.dpr;
-    const wPt = { x:(cx-state.view.x)/state.view.scale, y:(cy-state.view.y)/state.view.scale };
-    state.view.scale = newScale;
-    state.view.x = cx - wPt.x * state.view.scale;
-    state.view.y = cy - wPt.y * state.view.scale;
-    state.renderCache.dirty = true;
-    state.renderer.render();
-  };
-  const onTE = e => {
-    state.gesture.pinchStart = 0;
-    // ダブルタップ
-    const now = Date.now();
-    if(now - state.gesture.lastTap < 300) state.renderer.fit();
-    state.gesture.lastTap = now;
-  };
-
-  cv.addEventListener('touchmove', onTM, {passive:false});
-  cv.addEventListener('touchend',  onTE);
-
-  // ── クリック（測定）──
-  const onClick = e => {
-    if(!ToolManager.is('measure')) return;
-    if(!state.renderer) return;
-    const rect = els.cadView.getBoundingClientRect();
-    const sx = (e.clientX - rect.left) * state.dpr;
-    const sy = (e.clientY - rect.top ) * state.dpr;
-    const wp = state.renderer.screenToWorld(sx, sy);
-
-    // スナップ
-    const snap = jwwSnap(wp.x, wp.y);
-    const p = snap || wp;
-
-    const octx = els.cadOverlay.getContext('2d');
-    octx.strokeStyle='#ff0000';
-    octx.lineWidth = 2 * state.dpr;
-
-    // 点描画（screen座標で）
-    const sp = state.renderer.worldToScreen(p.x, p.y);
-    octx.beginPath();
-    octx.arc(sp.x, sp.y, 5*state.dpr, 0, Math.PI*2);
-    octx.stroke();
-
-    state.measurePts.push({screen:sp, world:p});
-
-    if(state.measurePts.length === 2){
-      const [p1,p2] = state.measurePts;
-      const dist = Math.hypot(p2.world.x-p1.world.x, p2.world.y-p1.world.y);
-      els.overlay.textContent = `距離: ${dist.toFixed(2)}`;
-      octx.beginPath();
-      octx.moveTo(p1.screen.x, p1.screen.y);
-      octx.lineTo(p2.screen.x, p2.screen.y);
-      octx.stroke();
-      state.measurePts = [];
-    } else {
-      els.overlay.textContent = '2点目をタップ';
-    }
-  };
-  cv.addEventListener('click', onClick);
-
-  // 参照保持（resetで削除用）
-  cv._cadHandlers = { onPD, onPM, onPU, onPM, onTE, onTM, onClick };
-}
-
-function teardownCadControls(){
-  const cv = els.cadView;
-  const h  = cv._cadHandlers;
-  if(!h) return;
-  cv.removeEventListener('pointerdown',   h.onPD);
-  cv.removeEventListener('pointermove',   h.onPM);
-  cv.removeEventListener('pointerup',     h.onPU);
-  cv.removeEventListener('pointercancel', h.onPU);
-  cv.removeEventListener('touchmove',     h.onTM);
-  cv.removeEventListener('touchend',      h.onTE);
-  cv.removeEventListener('click',         h.onClick);
-  delete cv._cadHandlers;
-  delete cv._cadControlsSetup;
-}
-
-// ─────────────────────────────────────────────
-// ⑥ JWWスナップ（端点のみ）
-// ─────────────────────────────────────────────
-function jwwSnap(wx, wy){
-  if(!state.jwwDoc) return null;
-  let best=null, bestD = 15/state.view.scale;
-  const chk = (px,py)=>{
-    const d=Math.hypot(px-wx,py-wy);
-    if(d<bestD){ bestD=d; best={x:px,y:py}; }
-  };
-  for(const e of state.jwwDoc.entities){
-    if(e.type==='LINE'){ chk(e.x1,e.y1); chk(e.x2,e.y2); }
-    else if(e.type==='CIRCLE'||e.type==='ARC'){ chk(e.cx,e.cy); }
-  }
-  return best;
-}
-
-// ─────────────────────────────────────────────
-// ⑦ JWW パーサー
-// ─────────────────────────────────────────────
-const SJIS_KANA = '｡｢｣､･ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝﾞﾟ'.split('');
-
-function decodeSJIS(bytes){
-  try{
-    return new TextDecoder('shift_jis',{fatal:false}).decode(bytes).replace(/\0+$/,'');
-  }catch{
-    let s='';
-    for(const b of bytes){
-      if(b===0) break;
-      if(b>=0xA1&&b<=0xDF) s+=SJIS_KANA[b-0xA1]||'?';
-      else s+=b<0x80?String.fromCharCode(b):'?';
-    }
-    return s;
-  }
-}
-
-class JwwR {
-  constructor(u8,dv){ this.u8=u8; this.dv=dv; this.pos=0; this.le=true; }
-  eof(){ return this.pos>=this.u8.length; }
-  u8r(){ return this.u8[this.pos++]; }
-  u16(){ const v=this.dv.getUint16(this.pos,this.le); this.pos+=2; return v; }
-  u32(){ const v=this.dv.getUint32(this.pos,this.le); this.pos+=4; return v; }
-  f64(){ const v=this.dv.getFloat64(this.pos,this.le); this.pos+=8; return v; }
-  bytes(n){ const v=this.u8.subarray(this.pos,this.pos+n); this.pos+=n; return v; }
-  str(n){ return decodeSJIS(this.bytes(n)); }
-  cstr(n){ let a=[]; for(let i=0;i<n&&this.pos<this.u8.length;i++){ const b=this.u8[this.pos++]; if(!b)break; a.push(b); } return decodeSJIS(Uint8Array.from(a)); }
-  seek(p){ this.pos=p; }
-}
-
-function jwwColor(c){ return `rgb(${c&0xFF},${(c>>8)&0xFF},${(c>>16)&0xFF})`; }
-
-function parseJww(ab){
-  const u8=new Uint8Array(ab), dv=new DataView(ab), r=new JwwR(u8,dv);
-  r.str(8); r.u32(); r.bytes(20); // header
-  const layers=[], entities=[], meta={units:'mm'};
-  while(!r.eof()){
-    if(r.pos+8>u8.length) break;
-    const tag=r.str(4), len=r.u32();
-    if(!tag.trim()) break;
-    if(len>u8.length) break;
-    const start=r.pos;
-    try{
-      if(tag==='LYR1'){ jwwLayers(r,len,layers); }
-      else if(tag==='ENT1'||tag==='ENT2'){ jwwEntities(r,len,entities); }
-      else if(tag==='UNIT'){ const e=r.pos+len; meta.units=['mm','cm','m','inch'][r.u16()]||'mm'; r.seek(e); }
-      else r.seek(start+len);
-    }catch(e){ r.seek(start+len); }
-  }
-  return {layers,entities,meta};
-}
-
-function jwwLayers(r,len,out){
-  const e=r.pos+len;
-  while(r.pos+72<=e){
-    const idx=r.u16(),flag=r.u16(),color=r.u32(),name=r.cstr(64);
-    out.push({idx,flag,color,name});
-  }
-  r.seek(e);
-}
-
-function jwwEntities(r,len,out){
-  const end=r.pos+len;
-  while(r.pos+6<=end){
-    const et=r.u16(), elen=r.u32(), es=r.pos;
-    if(elen===0) break;                   // FIX #3: 無限ループ防止
-    if(es+elen>end){ r.seek(end); break; }
-    try{
-      const cm=()=>{ const l=r.u16(),c=r.u32(),lt=r.u16(),w=r.f64(); return {layer:l,color:jwwColor(c),lineType:lt,width:w}; };
-      switch(et){
-        case 1:{ const c=cm(),x1=r.f64(),y1=r.f64(),x2=r.f64(),y2=r.f64(); out.push({type:'LINE',...c,x1,y1,x2,y2}); break; }
-        case 2:{ const c=cm(),cx=r.f64(),cy=r.f64(),rd=r.f64(); out.push({type:'CIRCLE',...c,cx,cy,r:rd}); break; }
-        case 3:{ const c=cm(),cx=r.f64(),cy=r.f64(),rd=r.f64(),a0=r.f64(),a1=r.f64(); out.push({type:'ARC',...c,cx,cy,r:rd,a0,a1}); break; }
-        case 4:{ const c=cm(),x=r.f64(),y=r.f64(),sz=r.f64(),rot=r.f64(); r.u16(); const s=r.cstr(256); out.push({type:'TEXT',...c,x,y,size:sz,rot,str:s}); break; }
-        case 5:{ const c=cm(),n=r.u16(),pts=[]; for(let i=0;i<n;i++) pts.push({x:r.f64(),y:r.f64()}); const cl=r.u16()!==0; out.push({type:'POLYLINE',...c,points:pts,closed:cl}); break; }
-      }
-    }catch(e){}
-    r.seek(es+elen);
-  }
-  r.seek(end);
-}
-
-function jwwBoundingBox(entities){
-  const bb={minX:Infinity,minY:Infinity,maxX:-Infinity,maxY:-Infinity};
-  const p=(x,y)=>{ bb.minX=Math.min(bb.minX,x); bb.minY=Math.min(bb.minY,y); bb.maxX=Math.max(bb.maxX,x); bb.maxY=Math.max(bb.maxY,y); };
-  for(const e of entities){
-    if(e.type==='LINE'){ p(e.x1,e.y1); p(e.x2,e.y2); }
-    else if(e.type==='CIRCLE'||e.type==='ARC'){ p(e.cx-e.r,e.cy-e.r); p(e.cx+e.r,e.cy+e.r); }
-    else if(e.type==='POLYLINE'){ for(const v of e.points) p(v.x,v.y); }
-    else if(e.type==='TEXT'){ p(e.x,e.y); p(e.x+e.size,e.y+e.size); }
-  }
-  if(!isFinite(bb.minX)) return {minX:0,minY:0,maxX:1,maxY:1};
-  return bb;
-}
-
-// Offscreen用：座標変換はrebuildCache側で行うので、ここは純粋に描画のみ
-function jwwDrawEntities(doc, ctx){
-  for(const e of doc.entities){
-    ctx.save();
-    ctx.lineWidth = Math.max(0.5/state.view.scale, e.width||0.5);
-    ctx.strokeStyle = e.color||'#222';
-    ctx.fillStyle   = e.color||'#222';
-    switch(e.type){
-      case 'LINE':
-        ctx.beginPath(); ctx.moveTo(e.x1,e.y1); ctx.lineTo(e.x2,e.y2); ctx.stroke(); break;
-      case 'CIRCLE':
-        ctx.beginPath(); ctx.arc(e.cx,e.cy,e.r,0,Math.PI*2); ctx.stroke(); break;
-      case 'ARC':
-        ctx.beginPath(); ctx.arc(e.cx,e.cy,e.r,e.a0,e.a1,false); ctx.stroke(); break;
-      case 'POLYLINE':
-        if(e.points.length>0){
-          ctx.beginPath(); ctx.moveTo(e.points[0].x,e.points[0].y);
-          for(let i=1;i<e.points.length;i++) ctx.lineTo(e.points[i].x,e.points[i].y);
-          if(e.closed) ctx.closePath(); ctx.stroke();
-        }
-        break;
-      case 'TEXT':
-        ctx.save();
-        ctx.translate(e.x,e.y); ctx.rotate(e.rot||0);
-        ctx.scale(1,-1);
-        ctx.font=`${Math.max(8/state.view.scale, e.size||12)}px sans-serif`;
-        ctx.fillText(e.str,0,0);
-        ctx.restore(); break;
-    }
-    ctx.restore();
-  }
-}
-
-// ─────────────────────────────────────────────
-// ⑧ openJWW（v4版）
-// ─────────────────────────────────────────────
-async function openJWW(file){
-  showEl(els.cadView);
-  showEl(els.overlay,'block');
-  const buf = await file.arrayBuffer();
-
-  // ⑮ 巨大JWWガード
-  const doc = parseJww(buf);
-  if(doc.entities.length > 300000){
-    showFallback(`巨大図面（${doc.entities.length}エンティティ）：表示不可`);
-    return;
-  }
-  state.jwwDoc = doc;
-  state.dxf    = null;
-
-  const c = els.cad;
-  c.width  = els.cadView.clientWidth  * state.dpr;
-  c.height = els.cadView.clientHeight * state.dpr;
-  els.cadOverlay.width  = c.width;
-  els.cadOverlay.height = c.height;
-
-  state.renderer = new JWWRenderer(c, doc);
-  // FIX #12: Safari初回描画 rAF待ち
-  await new Promise(r=>requestAnimationFrame(r));
-  state.renderer.fit();
-  setupCadControls();
-  showDXFControls();
-}
-
-// ─────────────────────────────────────────────
-// ⑨ IndexedDB
-// ─────────────────────────────────────────────
-let db;
-const initDB = () => new Promise(resolve=>{
-  const req = indexedDB.open('genbaDB', 4);
-  req.onupgradeneeded = e=>{
-    const d=e.target.result;
-    if(!d.objectStoreNames.contains('recents'))    d.createObjectStore('recents',{keyPath:'id',autoIncrement:true});
-    if(!d.objectStoreNames.contains('annotations')) d.createObjectStore('annotations',{keyPath:'key'});
-  };
-  req.onsuccess = e=>{ db=e.target.result; loadRecents(); resolve(); };
-  req.onerror   = ()=>resolve();
-});
-initDB();
-
-// ─────────────────────────────────────────────
-// ⑩ openFile
-// ─────────────────────────────────────────────
-async function openFile(file){
-  state.file=file; state.scale=1; state.imgX=0; state.imgY=0;
-  state.pdfScale=1; state.isDrawing=false; state.measurePts=[];
-  state.dpr = getDpr();  // FIX #dpr暴走: resize時再取得
+async function openFile(file) {
+  state.file       = file;
+  state.scale      = 1;
+  state.imgX       = 0;
+  state.imgY       = 0;
+  state.dpr        = getDpr();
+  state.measurePts = [];
   ToolManager.set('pan');
-  resetViewers();
+
+  // FIX: async reset待機
+  await resetViewers();
+
   els.viewer.classList.add('show');
   els.name.textContent = file.name;
+
   const ext = file.name.split('.').pop().toLowerCase();
-  try{
+
+  try {
     hideControls();
-    if(ext==='zip')                              { await openArchive(file); return; }
-    if(['txt','csv','json','md','log'].includes(ext))  { els.text.textContent=await file.text(); showEl(els.text); }
-    else if(ext==='pdf')                         { await renderPDF(file); showPDFControls(); }
-    else if(/^(png|jpe?g|webp|gif|svg)$/.test(ext)){
-      state.url=URL.createObjectURL(file);
-      els.img.src=state.url;
-      updateImgTransform();
-      showEl(els.imgView,'flex');
-      enableImagePanZoom();
-      if(state.imageList.length>1) showImageControls();
+
+    if (ext === 'zip') {
+      await openArchive(file);
+      return;
     }
-    else if(ext==='dxf')                         { await loadDXF(file); showDXFControls(); }
-    else if(ext==='dwg')                         { openDWG(); return; }
-    else if(/^(jww|jwc)$/.test(ext))             { await openJWW(file); }
-    else                                         { showFallback(`${ext.toUpperCase()}は未対応`); }
-    saveRecent(file);
-  }catch(err){ showFallback(err.message); }
+
+    if (['txt','csv','json','md','log'].includes(ext)) {
+      els.text.textContent = await file.text();
+      showEl(els.text);
+    }
+
+    else if (ext === 'pdf') {
+      await renderPDF(file);
+      showPDFControls();
+    }
+
+    else if (/^(png|jpe?g|webp|gif|svg)$/i.test(ext)) {
+
+      state.url = URL.createObjectURL(file);
+
+      await new Promise((resolve, reject) => {
+        els.img.onload = () => resolve();
+        els.img.onerror = reject;
+        els.img.src = state.url;
+      });
+
+      updateImgTransform();
+      showEl(els.imgView, 'flex');
+
+      enableImagePanZoom();
+
+      if (state.imageList.length > 1) {
+        showImageControls();
+      }
+    }
+
+    else if (ext === 'dxf') {
+      await loadDXF(file);
+      showDXFControls();
+    }
+
+    else if (ext === 'dwg') {
+      openDWG();
+      return;
+    }
+
+    else if (/^(jww|jwc)$/i.test(ext)) {
+      await openJWW(file);
+    }
+
+    else {
+      showFallback(`${ext.toUpperCase()}は未対応`);
+    }
+
+    await saveRecent(file);
+
+  } catch (err) {
+
+    console.error(err);
+
+    showFallback(
+      err?.message ||
+      String(err)
+    );
+  }
 }
+</script>
 
-// ─────────────────────────────────────────────
-// ⑪ 測定ボタン（JWW/DXF共用）
-// ─────────────────────────────────────────────
-function showDXFControls(){
-  showEl(els.measureBtn,'inline-block');
-  els.measureBtn.onclick = ()=>{
-    const measuring = !ToolManager.is('measure');
-    ToolManager.set(measuring ? 'measure' : 'pan');
-    els.measureBtn.classList.toggle('active', measuring);
-    state.measurePts = [];
-    els.overlay.textContent = measuring ? '1点目をタップ' : '';
-    const ov = els.cadOverlay.getContext('2d');
-    ov.clearRect(0, 0, els.cadOverlay.width, els.cadOverlay.height);
-  };
-}
+<!-- ▼ state追加（PDF cancel task追加） -->
+<script>
+state.pdfRenderTask = null;
+</script>
 
-// ─────────────────────────────────────────────
-// ⑫ DXF
-// ─────────────────────────────────────────────
-async function loadDXF(file){
-  showEl(els.cadView);
-  showEl(els.overlay,'block');
-  const c=els.cad, ov=els.cadOverlay;
-  c.width  = els.cadView.clientWidth  * state.dpr;
-  c.height = els.cadView.clientHeight * state.dpr;
-  ov.width=c.width; ov.height=c.height;
-  if(state.dxf){ try{ state.dxf.Dispose?state.dxf.Dispose():state.dxf.Clear?.(); }catch(e){} state.dxf=null; }
-  state.dxf = new DxfViewer.DxfViewer(c,{autoResize:true,clearColor:'#ffffff'});
-  await new Promise(r=>requestAnimationFrame(r)); // FIX #12
-  await state.dxf.Load({dxf:await file.text()});
-  state.dxf.Fit();
+<!-- ▼ drawPDFPage 完全修正版 -->
+<script>
+async function drawPDFPage() {
 
-  // DXF独自の測定（GetScenePoint使用）
-  showEl(els.measureBtn,'inline-block');
-  els.measureBtn.onclick = ()=>{
-    const measuring = !ToolManager.is('measure');
-    ToolManager.set(measuring ? 'measure' : 'pan');
-    els.measureBtn.classList.toggle('active', measuring);
-    state.measurePts = [];
-    els.overlay.textContent = measuring ? '1点目をタップ' : '';
-    ov.getContext('2d').clearRect(0,0,ov.width,ov.height);
-  };
-  els.cadView.onclick = e=>{
-    if(!ToolManager.is('measure')||!state.dxf) return;
-    const rect=els.cadView.getBoundingClientRect();
-    const x=e.clientX-rect.left, y=e.clientY-rect.top;
-    const p=state.dxf.GetScenePoint ? state.dxf.GetScenePoint(x,y) : null;
-    if(!p) return;
-    state.measurePts.push({screen:{x:x*state.dpr,y:y*state.dpr}, scene:p});
-    const octx=ov.getContext('2d');
-    octx.strokeStyle='#ff0000'; octx.lineWidth=2*state.dpr;
-    octx.beginPath(); octx.arc(x*state.dpr,y*state.dpr,5,0,Math.PI*2); octx.stroke();
-    if(state.measurePts.length===2){
-      const [p1,p2]=state.measurePts;
-      const d=Math.hypot(p2.scene.x-p1.scene.x,p2.scene.y-p1.scene.y);
-      els.overlay.textContent=`距離: ${d.toFixed(2)}`;
-      octx.beginPath(); octx.moveTo(p1.screen.x,p1.screen.y); octx.lineTo(p2.screen.x,p2.screen.y); octx.stroke();
-      state.measurePts=[];
-    } else els.overlay.textContent='2点目をタップ';
-  };
-}
+  if (!state.pdfDoc) return;
 
-// ⑭ DWG stub
-function openDWG(){ showFallback('DWGはDXF変換エンジン準備中'); }
+  const token = ++state.pdfRenderToken;
 
-// ─────────────────────────────────────────────
-// ⑬ PDF
-// ─────────────────────────────────────────────
-async function renderPDF(file, password=null){
-  showEl(els.pdfWrap,'flex');
-  const buf=await file.arrayBuffer();
-  state.pdfDoc=await pdfjsLib.getDocument({data:buf,password}).promise;
-  state.pdfPage=1;
-  bindPdfTouch();
-  await new Promise(r=>requestAnimationFrame(r)); // FIX #12
-  await drawPDFPage();
-  setupPDFDrawing();
-}
+  // FIX: 古いrender task停止
+  try {
+    if (state.pdfRenderTask) {
+      state.pdfRenderTask.cancel();
+    }
+  } catch(e){}
 
-async function drawPDFPage(){
-  if(!state.pdfDoc) return;
-  const page=await state.pdfDoc.getPage(state.pdfPage);
-  const cw=els.pdfWrap.clientWidth||window.innerWidth;
-  const vb=page.getViewport({scale:1});
-  const bs=(cw/vb.width)*0.95;
-  const vp=page.getViewport({scale:bs*state.pdfScale*state.dpr});
-  const ctx=els.pdf.getContext('2d');
-  els.pdf.width=vp.width; els.pdf.height=vp.height;
-  els.pdfOverlay.width=vp.width; els.pdfOverlay.height=vp.height;
-  await page.render({canvasContext:ctx,viewport:vp,intent:'display'}).promise;
-  els.pageInfo.textContent=`${state.pdfPage}/${state.pdfDoc.numPages}`;
-  // FIX #7: await でアノテーション競合防止
+  const page = await state.pdfDoc.getPage(state.pdfPage);
+
+  if (token !== state.pdfRenderToken) return;
+
+  const wrapW = els.pdfWrap.clientWidth || window.innerWidth;
+
+  const baseViewport = page.getViewport({ scale: 1 });
+
+  const baseScale =
+    (wrapW / baseViewport.width) * 0.95;
+
+  const dpr = getDpr();
+
+  const viewport = page.getViewport({
+    scale: baseScale * state.pdfScale * dpr
+  });
+
+  // FIX: aspect保持
+  const MAX = 4096;
+
+  const ratio = Math.min(
+    1,
+    MAX / Math.max(viewport.width, viewport.height)
+  );
+
+  const finalW = Math.floor(viewport.width * ratio);
+  const finalH = Math.floor(viewport.height * ratio);
+
+  els.pdf.width  = finalW;
+  els.pdf.height = finalH;
+
+  els.pdfOverlay.width  = finalW;
+  els.pdfOverlay.height = finalH;
+
+  const ctx = els.pdf.getContext('2d', {
+    alpha:false
+  });
+
+  ctx.clearRect(0,0,finalW,finalH);
+
+  const renderViewport = page.getViewport({
+    scale:
+      baseScale *
+      state.pdfScale *
+      dpr *
+      ratio
+  });
+
+  state.pdfRenderTask = page.render({
+    canvasContext: ctx,
+    viewport: renderViewport,
+    intent:'display'
+  });
+
+  try {
+
+    await state.pdfRenderTask.promise;
+
+  } catch(e) {
+
+    if (e?.name !== 'RenderingCancelledException') {
+      throw e;
+    }
+
+    return;
+  }
+
+  if (token !== state.pdfRenderToken) return;
+
+  els.pageInfo.textContent =
+    `${state.pdfPage}/${state.pdfDoc.numPages}`;
+
   await loadAnnotation();
+
   redrawAnnotations();
 }
+</script>
 
-function bindPdfTouch(){
-  if(state.pdfTouchBound) return; state.pdfTouchBound=true; let sx=0;
-  els.pdfWrap.addEventListener('touchstart',e=>{ sx=e.touches[0].clientX; });
-  els.pdfWrap.addEventListener('touchend',async e=>{
-    if(state.isDrawing||!state.pdfDoc) return;
-    const dx=e.changedTouches[0].clientX-sx;
-    if(Math.abs(dx)>50){
-      state.pdfPage+=dx<0?1:-1;
-      state.pdfPage=Math.max(1,Math.min(state.pdfDoc.numPages,state.pdfPage));
-      await drawPDFPage();
-    }
-  });
-}
+<!-- ▼ WebGL drawArrays overflow対策 -->
+<script>
+render() {
 
-function setupPDFDrawing(){
-  const ov=els.pdfOverlay, ctx=ov.getContext('2d');
-  let drawing=false, pts=[];
-  els.penBtn.onclick=()=>{
-    state.isDrawing=!state.isDrawing;
-    els.penBtn.classList.toggle('active',state.isDrawing);
-    ov.style.pointerEvents=state.isDrawing?'auto':'none';
-  };
-  function getNorm(e){ const r=ov.getBoundingClientRect(); return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height}; }
-  ov.onpointerdown=e=>{ if(!state.isDrawing)return; drawing=true; pts=[getNorm(e)]; };
-  ov.onpointermove=e=>{
-    if(!drawing)return;
-    const p=getNorm(e); pts.push(p);
-    const w=ov.width,h=ov.height;
-    ctx.strokeStyle='red'; ctx.lineWidth=3*state.dpr; ctx.lineCap='round';
-    ctx.beginPath(); ctx.moveTo(pts[pts.length-2].x*w,pts[pts.length-2].y*h);
-    ctx.lineTo(p.x*w,p.y*h); ctx.stroke();
-  };
-  ov.onpointerup=()=>{
-    if(!drawing)return; drawing=false;
-    if(!state.pdfAnnotations[state.pdfPage]) state.pdfAnnotations[state.pdfPage]=[];
-    state.pdfAnnotations[state.pdfPage].push(pts);
-    saveAnnotation();
-  };
-}
+  if (!this.initialized) return;
 
-function redrawAnnotations(){
-  const ctx=els.pdfOverlay.getContext('2d');
-  ctx.clearRect(0,0,els.pdfOverlay.width,els.pdfOverlay.height);
-  const ann=state.pdfAnnotations[state.pdfPage]||[];
-  const w=els.pdfOverlay.width, h=els.pdfOverlay.height;
-  ctx.strokeStyle='red'; ctx.lineWidth=3*state.dpr; ctx.lineCap='round';
-  ann.forEach(s=>{ ctx.beginPath(); s.forEach((p,i)=>{ if(i===0)ctx.moveTo(p.x*w,p.y*h); else ctx.lineTo(p.x*w,p.y*h); }); ctx.stroke(); });
-}
+  const gl = this.gl;
 
-async function saveAnnotation(){
-  if(!db||!state.file) return;
-  const tx=db.transaction('annotations','readwrite');
-  tx.objectStore('annotations').put({key:state.file.name+'_ann', data:state.pdfAnnotations});
-}
-async function loadAnnotation(){
-  if(!db||!state.file) return;
-  return new Promise(resolve=>{
-    const req=db.transaction('annotations','readonly').objectStore('annotations').get(state.file.name+'_ann');
-    req.onsuccess=()=>{ if(req.result) state.pdfAnnotations=req.result.data; resolve(); };
-    req.onerror=()=>resolve();
-  });
-}
+  const w = this.canvas.width;
+  const h = this.canvas.height;
 
-// ─────────────────────────────────────────────
-// ⑮ ZIP（パスワードリトライ）
-// ─────────────────────────────────────────────
-async function openArchive(file){
-  showEl(els.list); els.list.innerHTML='展開中...';
-  let reader;
-  try{
-    reader=new zip.ZipReader(new zip.BlobReader(file));
-    await reader.getEntries();
-  }catch(e){
-    els.list.innerHTML='';
-    for(let tries=0;tries<3;){
-      const pw=prompt(`ZIPパスワード (${tries+1}/3):`);
-      if(pw===null){ els.list.innerHTML='<p style="padding:20px">中止しました</p>'; return; }
-      try{
-        reader=new zip.ZipReader(new zip.BlobReader(file),{password:pw});
-        await reader.getEntries(); break;
-      }catch(e2){ tries++; if(tries>=3){ els.list.innerHTML='<p style="padding:20px">パスワードが違います</p>'; return; } }
-    }
+  gl.viewport(0,0,w,h);
+
+  gl.clearColor(1,1,1,1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.useProgram(this.program);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+
+  const BYTES = this._stride;
+
+  gl.enableVertexAttribArray(this.loc.aPos);
+
+  gl.vertexAttribPointer(
+    this.loc.aPos,
+    2,
+    gl.FLOAT,
+    false,
+    BYTES,
+    0
+  );
+
+  gl.enableVertexAttribArray(this.loc.aColor);
+
+  gl.vertexAttribPointer(
+    this.loc.aColor,
+    3,
+    gl.FLOAT,
+    false,
+    BYTES,
+    8
+  );
+
+  gl.uniform2f(
+    this.loc.uPan,
+    state.view.x,
+    state.view.y
+  );
+
+  gl.uniform1f(
+    this.loc.uScale,
+    state.view.scale
+  );
+
+  gl.uniform2f(
+    this.loc.uResolution,
+    w,
+    h
+  );
+
+  // FIX: chunk描画
+  const CHUNK = 65535;
+
+  for (
+    let i = 0;
+    i < this.vertexCount;
+    i += CHUNK
+  ) {
+
+    gl.drawArrays(
+      gl.LINES,
+      i,
+      Math.min(CHUNK, this.vertexCount - i)
+    );
   }
-  const entries=await reader.getEntries();
-  state.archive={reader,entries,file};
-  els.list.innerHTML='';
-  entries.filter(e=>!e.directory).forEach(e=>{
-    const div=document.createElement('div'); div.className='list-item';
-    div.innerHTML=`<span>${e.filename}</span><span class="badge">${(e.uncompressedSize/1024).toFixed(0)}KB</span>`;
-    div.onclick=async()=>{ try{ openFile(new File([await e.getData(new zip.BlobWriter())],e.filename.split('/').pop())); }catch(err){ alert('展開エラー: '+err.message); } };
-    els.list.appendChild(div);
-  });
-  // ⑮ ZIPリーダー解放
-  // ※ entryのgetDataが終わった後に閉じる必要があるため、ここでは閉じない（各entryのonclick後に個別close）
 }
+</script>
 
-// ─────────────────────────────────────────────
-// ⑯ resetViewers（Safariメモリ対策含む）
-// ─────────────────────────────────────────────
-function releaseCanvas(c){ if(c){ c.width=0; c.height=0; } }
+<!-- ▼ DXF GPUメモリリーク修正版 -->
+<script>
+async function resetViewers() {
 
-function resetViewers(){
-  if(state.url){ URL.revokeObjectURL(state.url); state.url=null; }
-  ['pdfWrap','imgView','text','cadView','list','fallback','overlay'].forEach(k=>{
-    const el=els[k]||document.getElementById(k); if(el) hideEl(el);
-  });
-  // DXF dispose
-  if(state.dxf){ try{ state.dxf.Dispose?state.dxf.Dispose():state.dxf.Clear?.(); }catch(e){} state.dxf=null; }
-  // JWW renderer
-  state.renderer=null;
-  state.jwwDoc=null;
-  // PDF
-  state.pdfAnnotations={};
-  state.pdfTouchBound=false;
-  state.pdfDoc=null;
-  // ToolManager reset
+  cancelRender();
+
+  _resizeObserver.disconnect();
+
+  if (state.url) {
+    URL.revokeObjectURL(state.url);
+    state.url = null;
+  }
+
+  [
+    'pdfWrap',
+    'imgView',
+    'text',
+    'cadView',
+    'list',
+    'fallback',
+    'overlay'
+  ].forEach(k => hideEl(els[k]));
+
+  if (state.renderer) {
+
+    try {
+      state.renderer.dispose?.();
+    } catch(e){}
+
+    state.renderer = null;
+  }
+
+  if (state.dxf) {
+
+    try {
+
+      state.dxf.Dispose
+        ? state.dxf.Dispose()
+        : state.dxf.Clear?.();
+
+      // FIX: WebGL強制解放
+      const gl =
+        state.dxf
+          ?.renderer
+          ?.renderer
+          ?.getContext?.();
+
+      gl
+        ?.getExtension('WEBGL_lose_context')
+        ?.loseContext();
+
+    } catch(e){}
+
+    state.dxf = null;
+  }
+
+  els.cadView.onclick = null;
+
+  if (state.pdfDoc) {
+
+    try {
+      await state.pdfDoc.destroy();
+    } catch(e){}
+
+    state.pdfDoc = null;
+  }
+
+  if (state.archive?.reader) {
+
+    try {
+      await state.archive.reader.close();
+    } catch(e){}
+  }
+
+  state.archive = null;
+
+  state.jwwDoc = null;
+
+  state.pdfAnnotations = {};
+
+  state.pdfTouchBound = false;
+
+  state.pdfPage = 1;
+
+  state.pdfScale = 1;
+
+  state.pdfRenderToken = 0;
+
   ToolManager.set('pan');
+
   els.measureBtn.classList.remove('active');
-  // CAD controls teardown（二重登録防止）
+
+  state.measurePts = [];
+
   teardownCadControls();
-  // canvas overlay クリア（不残留）
-  const ov=els.cadOverlay;
-  if(ov){ const ctx=ov.getContext('2d'); ctx.clearRect(0,0,ov.width,ov.height); }
-  // ⑫ Safari canvas メモリ解放
+
+  const ov = els.cadOverlay;
+
+  if (ov) {
+
+    ov.getContext('2d')
+      .clearRect(
+        0,
+        0,
+        ov.width,
+        ov.height
+      );
+  }
+
+  if (state.renderCache.imageBitmap) {
+
+    state.renderCache.imageBitmap.close();
+
+    state.renderCache.imageBitmap = null;
+  }
+
+  state.renderCache.dirty = true;
+
   releaseCanvas(els.cad);
   releaseCanvas(els.cadOverlay);
+
   releaseCanvas(els.pdf);
   releaseCanvas(els.pdfOverlay);
-  // Offscreenキャッシュ解放
-  if(state.renderCache.baseCanvas){ releaseCanvas(state.renderCache.baseCanvas); state.renderCache.baseCanvas=null; state.renderCache.baseCtx=null; }
-  state.renderCache.dirty=true;
-  // gesture状態リセット
+
+  els.imgView.onpointerdown = null;
+  els.imgView.onpointermove = null;
+  els.imgView.onpointerup   = null;
+
   state.gesture.activePointers.clear();
-  state.gesture.isPanning=false;
-  state.gesture.pinchStart=0;
+
+  state.gesture.isPanning = false;
+
+  state.gesture.pinchStart = 0;
 }
+</script>
 
-// ─────────────────────────────────────────────
-// ⑰ ズーム（JWW/DXF/PDF/画像）
-// ─────────────────────────────────────────────
-function jwwZoom(factor){
-  const cx=els.cad.width/2, cy=els.cad.height/2;
-  const wx=(cx-state.view.x)/state.view.scale;
-  const wy=(cy-state.view.y)/state.view.scale;
-  state.view.scale*=factor;
-  state.view.x=cx-wx*state.view.scale;
-  state.view.y=cy-wy*state.view.scale;
-  state.renderCache.dirty=true;
-  state.renderer.render();
-  // overlay クリア
-  const ov=els.cadOverlay.getContext('2d');
-  ov.clearRect(0,0,els.cadOverlay.width,els.cadOverlay.height);
-  state.measurePts=[];
-}
+<!-- ▼ 画像ピンチズーム対応 -->
+<script>
+function enableImagePanZoom() {
 
-document.getElementById('zoomIn').addEventListener('click',()=>{
-  if(els.imgView.style.display!=='none'){ state.scale*=1.2; updateImgTransform(); }
-  else if(els.cadView.style.display!=='none'){
-    if(state.dxf) state.dxf.Zoom(1.2);
-    else if(state.renderer&&state.jwwDoc) jwwZoom(1.2);
-  }
-  else if(state.pdfDoc){ state.pdfScale*=1.2; drawPDFPage(); }
-});
-document.getElementById('zoomOut').addEventListener('click',()=>{
-  if(els.imgView.style.display!=='none'){ state.scale/=1.2; updateImgTransform(); }
-  else if(els.cadView.style.display!=='none'){
-    if(state.dxf) state.dxf.Zoom(0.8);
-    else if(state.renderer&&state.jwwDoc) jwwZoom(1/1.2);
-  }
-  else if(state.pdfDoc){ state.pdfScale/=1.2; drawPDFPage(); }
-});
+  let last = null;
 
-// ─────────────────────────────────────────────
-// ⑱ 各種ユーティリティ
-// ─────────────────────────────────────────────
-function hideControls(){ ['pagePrev','pageNext','pageInfo','penBtn','measureBtn'].forEach(k=>hideEl(els[k])); }
-function showPDFControls(){ ['pagePrev','pageNext','pageInfo','penBtn'].forEach(k=>showEl(els[k],'inline-block')); }
-function showImageControls(){ ['pagePrev','pageNext','pageInfo'].forEach(k=>showEl(els[k],'inline-block')); els.pageInfo.textContent=`${state.imageIndex+1}/${state.imageList.length}`; }
-function showFallback(h){ els.fallback.innerHTML=`<h3>表示エラー</h3><p>${h}</p>`; showEl(els.fallback); }
+  let pan = false;
 
-document.getElementById('closeBtn').addEventListener('click',()=>{ els.viewer.classList.remove('show'); resetViewers(); });
-document.getElementById('backBtn').addEventListener('click',()=>{ if(state.archive){ resetViewers(); showEl(els.list); } else document.getElementById('closeBtn').click(); });
-document.getElementById('pickBtn').addEventListener('click',()=>els.fileInput.click());
+  let pinchStart = 0;
+  let pinchScale = 1;
 
-els.fileInput.addEventListener('change', e=>{
-  const files=[...e.target.files];
-  if(files.length){
-    state.imageList=files.filter(f=>/\.(png|jpe?g|webp|gif|svg)$/i.test(f.name));
-    state.imageIndex=0;
-    openFile(files[0]);
-  }
-  e.target.value='';
-});
+  els.imgView.onpointerdown = e => {
 
-document.getElementById('pagePrev').addEventListener('click',async()=>{
-  if(state.pdfDoc){ state.pdfPage=Math.max(1,state.pdfPage-1); await drawPDFPage(); }
-  else if(state.imageList.length>1){ state.imageIndex=(state.imageIndex-1+state.imageList.length)%state.imageList.length; openFile(state.imageList[state.imageIndex]); }
-});
-document.getElementById('pageNext').addEventListener('click',async()=>{
-  if(state.pdfDoc){ state.pdfPage=Math.min(state.pdfDoc.numPages,state.pdfPage+1); await drawPDFPage(); }
-  else if(state.imageList.length>1){ state.imageIndex=(state.imageIndex+1)%state.imageList.length; openFile(state.imageList[state.imageIndex]); }
-});
+    pan = true;
 
-function updateImgTransform(){ els.img.style.transform=`translate(${state.imgX}px,${state.imgY}px) scale(${state.scale})`; }
-function enableImagePanZoom(){
-  let last=null,pan=false;
-  els.imgView.onpointerdown=e=>{ pan=true; last={x:e.clientX-state.imgX,y:e.clientY-state.imgY}; els.imgView.setPointerCapture(e.pointerId); };
-  els.imgView.onpointermove=e=>{ if(!pan)return; state.imgX=e.clientX-last.x; state.imgY=e.clientY-last.y; updateImgTransform(); };
-  els.imgView.onpointerup=()=>pan=false;
-}
+    last = {
+      x: e.clientX - state.imgX,
+      y: e.clientY - state.imgY
+    };
 
-// FIX #6: 5MB制限・最大10件・古いもの削除
-async function saveRecent(file){
-  if(!db||file.size>5*1024*1024) return;
-  const tx=db.transaction('recents','readwrite');
-  tx.objectStore('recents').add({name:file.name,blob:file,ts:Date.now()});
-  const req2=db.transaction('recents','readonly').objectStore('recents').getAll();
-  req2.onsuccess=()=>{
-    const items=req2.result.sort((a,b)=>a.ts-b.ts);
-    if(items.length>10){
-      const tx3=db.transaction('recents','readwrite');
-      items.slice(0,items.length-10).forEach(it=>tx3.objectStore('recents').delete(it.id));
-    }
+    els.imgView.setPointerCapture(e.pointerId);
   };
-  loadRecents();
-}
-async function loadRecents(){
-  if(!db) return;
-  const req=db.transaction('recents','readonly').objectStore('recents').getAll();
-  req.onsuccess=()=>{
-    const items=req.result.sort((a,b)=>b.ts-a.ts).slice(0,5);
-    els.recentList.innerHTML=items.length?'<h4 style="margin:8px">最近のファイル</h4>':'';
-    items.forEach(it=>{
-      const div=document.createElement('div'); div.className='recent-item';
-      div.innerHTML=`<span>📄</span><div>${it.name}</div>`;
-      div.onclick=()=>openFile(it.blob);
-      els.recentList.appendChild(div);
-    });
+
+  els.imgView.onpointermove = e => {
+
+    if (!pan) return;
+
+    state.imgX = e.clientX - last.x;
+    state.imgY = e.clientY - last.y;
+
+    updateImgTransform();
+  };
+
+  els.imgView.onpointerup = () => {
+    pan = false;
+  };
+
+  els.imgView.ontouchmove = e => {
+
+    if (e.touches.length !== 2) return;
+
+    e.preventDefault();
+
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
+
+    const dist = Math.hypot(
+      t2.clientX - t1.clientX,
+      t2.clientY - t1.clientY
+    );
+
+    if (!pinchStart) {
+
+      pinchStart = dist;
+      pinchScale = state.scale;
+
+      return;
+    }
+
+    state.scale =
+      pinchScale *
+      (dist / pinchStart);
+
+    updateImgTransform();
+
+  };
+
+  els.imgView.ontouchend = () => {
+    pinchStart = 0;
   };
 }
 </script>
-</body>
-</html>
+
+<!-- ▼ saveRecent quota修正版 -->
+<script>
+async function saveRecent(file) {
+
+  if (!db) return;
+
+  if (file.size > 5 * 1024 * 1024) return;
+
+  try {
+
+    const estimate =
+      await navigator.storage?.estimate?.();
+
+    console.log(
+      'Storage:',
+      estimate?.usage,
+      '/',
+      estimate?.quota
+    );
+
+  } catch(e){}
+
+  return new Promise(resolve => {
+
+    try {
+
+      const tx =
+        db.transaction(
+          'recents',
+          'readwrite'
+        );
+
+      const store =
+        tx.objectStore('recents');
+
+      store.add({
+        name:file.name,
+        blob:file,
+        ts:Date.now()
+      });
+
+      tx.oncomplete = async () => {
+
+        const tx2 =
+          db.transaction(
+            'recents',
+            'readwrite'
+          );
+
+        const store2 =
+          tx2.objectStore('recents');
+
+        const req =
+          store2.getAll();
+
+        req.onsuccess = () => {
+
+          const items =
+            req.result.sort(
+              (a,b)=>a.ts-b.ts
+            );
+
+          if (items.length > 10) {
+
+            items
+              .slice(0, items.length-10)
+              .forEach(it=>{
+                store2.delete(it.id);
+              });
+          }
+
+          tx2.oncomplete = () => {
+            loadRecents();
+            resolve();
+          };
+        };
+      };
+
+      tx.onerror = e => {
+
+        console.warn(
+          'IndexedDB write failed',
+          e
+        );
+
+        resolve();
+      };
+
+    } catch(e) {
+
+      console.warn(
+        'IndexedDB quota',
+        e
+      );
+
+      resolve();
+    }
+  });
+}
+</script>
+
+<!-- ▼ WebGL restore失敗時 fallback -->
+<script>
+this.canvas.addEventListener(
+  'webglcontextrestored',
+  () => {
+
+    try {
+
+      console.warn(
+        '[WebGL] context restored'
+      );
+
+      this._init();
+
+      this.fit();
+
+      scheduleRender();
+
+    } catch(e) {
+
+      console.warn(
+        '[WebGL] restore failed → Canvas2D fallback'
+      );
+
+      state.renderer =
+        new JWWRenderer(
+          els.cad,
+          this.doc
+        );
+
+      state.renderer.fit();
+
+      scheduleRender();
+    }
+
+  },
+  false
+);
+</script>
+
+<!-- ▼ jwwZoom LOD高速化 -->
+<script>
+state.renderCache.lastScale = 1;
+
+function jwwZoom(factor) {
+
+  const cx = els.cad.width / 2;
+  const cy = els.cad.height / 2;
+
+  const wx =
+    (cx - state.view.x) /
+    state.view.scale;
+
+  const wy =
+    (cy - state.view.y) /
+    state.view.scale;
+
+  const prevScale =
+    state.view.scale;
+
+  state.view.scale *= factor;
+
+  state.view.x =
+    cx - wx * state.view.scale;
+
+  state.view.y =
+    cy - wy * state.view.scale;
+
+  // FIX: LOD差分判定
+  const diff =
+    Math.abs(
+      state.view.scale -
+      state.renderCache.lastScale
+    ) /
+    state.renderCache.lastScale;
+
+  if (
+    !(state.renderer instanceof WebGLRenderer)
+  ) {
+
+    if (diff > 0.25) {
+
+      state.renderCache.dirty = true;
+
+      state.renderCache.lastScale =
+        state.view.scale;
+    }
+  }
+
+  scheduleRender();
+
+  els.cadOverlay
+    .getContext('2d')
+    .clearRect(
+      0,
+      0,
+      els.cadOverlay.width,
+      els.cadOverlay.height
+    );
+
+  state.measurePts = [];
+}
+</script>

@@ -1,283 +1,1063 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Universal Web Viewer - Stabilized</title>
-    <!-- PDF.js CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <style>
-        :root { --bg: #1a1a1a; --panel: #2d2d2d; --text: #eee; }
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); font-family: sans-serif; overflow: hidden; }
-        
-        /* 画面構成 */
-        #app { display: flex; flex-direction: column; height: 100vh; }
-        header { background: var(--panel); padding: 10px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #444; }
-        #viewer-container { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>現場ビューア v3 PRO OFFLINE + JWW</title>
 
-        /* ビューア要素 */
-        .viewer-unit { display: none; max-width: 100%; max-height: 100%; position: absolute; }
-        #text-view { white-space: pre-wrap; background: #fff; color: #333; padding: 20px; overflow: auto; width: 90%; height: 90%; }
-        #img-view { cursor: grab; display: none; align-items: center; justify-content: center; width: 100%; height: 100%; touch-action: none; }
-        #img-el { transition: transform 0.1s ease-out; }
-        #pdf-wrap { width: 100%; height: 100%; overflow: auto; display: none; flex-direction: column; align-items: center; }
-        canvas { max-width: 100%; height: auto; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+<!-- PDF.js (core + worker) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+</script>
 
-        /* コントロール */
-        .controls { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 30px; display: none; gap: 15px; z-index: 100; }
-        #fallback { color: #ff6b6b; padding: 20px; text-align: center; }
-        .show { display: flex !important; }
-    </style>
+<!-- JSZip -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+<style>
+:root{
+  color-scheme: dark light;
+  --bg:#0f1115;
+  --fg:#e6eaf2;
+  --muted:#9aa4b2;
+  --accent:#6dd3ff;
+  --danger:#ff5470;
+  --ok:#2ecc71;
+  --panel:#151922;
+  --panel2:#0b0d12;
+  --line:#2a2f3a;
+}
+{box-sizing:border-box}
+html,body{height:100%}
+body {
+  margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+  overscroll-behavior: none;
+}
+#app { width:100vw; height:100vh; display:grid; grid-template-rows:auto 1fr auto; }
+#toolbar {
+  display:flex; gap:6px; align-items:center; padding:8px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10;
+}
+#toolbar .group{display:flex; gap:6px; align-items:center; flex-wrap:wrap}
+button, .chip, select, input[type="text"]{
+  background:#1b2030; color:var(--fg); border:1px solid #2b3242; border-radius:8px; padding:8px 10px; font-size:14px; cursor:pointer;
+}
+button:hover{border-color:#3a4358}
+button:disabled{opacity:0.5; cursor:not-allowed}
+input[type="file"]{display:none}
+.label-btn{padding:8px 12px; background:#23293b; border:1px dashed #3a4358; border-radius:8px; cursor:pointer}
+#main { position:relative; overflow:hidden; background:var(--panel2); }
+#viewer { position:absolute; inset:0; touch-action:none; }
+canvas, img { max-width:100%; max-height:100%; image-rendering:crisp-edges }
+#pdfCanvas, #dxfCanvas { width:100%; height:100% }
+#textView { white-space:pre; overflow:auto; max-height:90vh; width:100%; height:100%; padding:12px; }
+#fallback { position:absolute; bottom:8px; left:8px; right:8px; color:var(--danger); pointer-events:none; }
+#side {
+  position:absolute; right:0; top:0; bottom:0; width:300px; max-width:84vw; background:rgba(12,14,20,0.92); border-left:1px solid var(--line);
+  display:flex; flex-direction:column; z-index:9; backdrop-filter: blur(8px);
+}
+#side header{padding:10px 12px; border-bottom:1px solid var(--line); font-weight:600; display:flex; justify-content:space-between; align-items:center}
+#side .content{flex:1; overflow:auto; padding:8px 10px}
+.section{margin:10px 0}
+.section h4{margin:8px 0 6px 0; color:var(--muted); font-weight:600}
+.layer-item{display:flex; align-items:center; gap:8px; margin:4px 0}
+.layer-item input{transform:scale(1.1)}
+.pin{position:absolute; width:16px; height:16px; border-radius:50%; background:var(--accent); border:2px solid #fff; box-shadow:0 0 0 2px rgba(0,0,0,0.4)}
+#statusbar{display:flex; gap:10px; align-items:center; padding:6px 10px; background:var(--panel); border-top:1px solid var(--line); font-size:12px; color:var(--muted); overflow:auto}
+kbd{background:#222a; border:1px solid #444a; padding:2px 5px; border-radius:4px}
+.badge{padding:2px 6px; border-radius:10px; background:#24304a; color:#bcd}
+@media (max-width: 768px){
+  #side{width:72vw}
+  .group.hide-sm{display:none}
+}
+</style>
 </head>
 <body>
 
 <div id="app">
-    <header>
-        <input type="file" id="file-input">
-        <span id="file-name">ファイルを選択してください</span>
-    </header>
+  <div id="toolbar">
+    <div class="group">
+      <label class="label-btn" for="fileInput">ファイルを開く</label>
+      <input id="fileInput" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.json,.csv,.log,.zip,.dxf,.jww,.jwc">
+      <button id="btnReset" title="リセット">RESET</button>
+      <button id="btnFolder" title="フォルダ管理">フォルダ</button>
+      <button id="btnCache" title="キャッシュ一覧">キャッシュ</button>
+      <button id="btnSide" title="サイドパネル切替">サイド</button>
+    </div>
+    <div class="group hide-sm">
+      <button id="btnFit" title="フィット">Fit</button>
+      <button id="btnZoomIn" title="拡大">+</button>
+      <button id="btnZoomOut" title="縮小">-</button>
+      <button id="btnRotate" title="回転">↻</button>
+      <span>ページ: <span id="pgInfo">-</span></span>
+      <button id="btnPrev">◀</button>
+      <button id="btnNext">▶</button>
+    </div>
+    <div class="group">
+      <button id="btnAnnot" title="PDF注釈モード切替">注釈</button>
+      <button id="btnPin" title="測定ピン">ピン</button>
+      <select id="scaleSelect" title="縮尺(mm/px)">
+        <option value="1">1 mm/px</option>
+        <option value="0.5">0.5 mm/px</option>
+        <option value="2">2 mm/px</option>
+        <option value="10">10 mm/px</option>
+      </select>
+      <span class="badge" id="badgeActive">NONE</span>
+    </div>
+  </div>
 
-    <div id="viewer-container" id="viewer-root">
-        <!-- テキスト表示 -->
-        <div id="text-view" class="viewer-unit"></div>
-        
-        <!-- 画像表示 -->
-        <div id="img-view" class="viewer-unit">
-            <img id="img-el" alt="preview">
-        </div>
-
-        <!-- PDF表示 -->
-        <div id="pdf-wrap" class="viewer-unit">
-            <canvas id="pdf-canvas"></canvas>
-            <canvas id="pdf-overlay"></canvas>
-        </div>
-
-        <!-- CAD/DXF用キャンバス (仮) -->
-        <canvas id="cad-canvas" class="viewer-unit"></canvas>
-        <canvas id="cad-overlay" class="viewer-unit"></canvas>
-
-        <div id="fallback" class="viewer-unit"></div>
+  <div id="main">
+    <div id="viewer">
+      <img id="imgView" alt="" style="display:none; position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%">
+      <canvas id="pdfCanvas" style="display:none; position:absolute; inset:0"></canvas>
+      <canvas id="dxfCanvas" style="display:none; position:absolute; inset:0"></canvas>
+      <pre id="textView" style="display:none; position:absolute; inset:0"></pre>
+      <div id="fallback"></div>
     </div>
 
-    <!-- UIコントロール -->
-    <div id="pdf-controls" class="controls">
-        <button onclick="changePage(-1)">前へ</button>
-        <span id="page-info">0/0</span>
-        <button onclick="changePage(1)">次へ</button>
-    </div>
+    <aside id="side" hidden>
+      <header>
+        <span>サイドパネル</span>
+        <button id="btnSideClose" title="閉じる">×</button>
+      </header>
+      <div class="content">
+        <div class="section" id="secLayers" hidden>
+          <h4>レイヤー</h4>
+          <div id="layers"></div>
+        </div>
+        <div class="section">
+          <h4>注釈</h4>
+          <div class="group" style="gap:4px">
+            <button id="btnAnnotSave">保存</button>
+            <button id="btnAnnotClear">クリア</button>
+          </div>
+          <p style="color:var(--muted); font-size:12px; line-height:1.4">
+            - マウス/指で描画（PDF上）<br>
+            - <kbd>Ctrl+Z</kbd> 取り消し
+          </p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="statusbar">
+    <span id="status">READY</span>
+    <span id="coord"></span>
+    <span id="mem"></span>
+  </div>
 </div>
 
 <script>
-/* =========================
-   GLOBAL STATE & INIT
-========================= */
-const state = {
-    file: null, url: null, scale: 1, imgX: 0, imgY: 0, dpr: window.devicePixelRatio || 1,
-    pdfDoc: null, pdfPage: 1, pdfScale: 1, pdfRenderToken: 0, pdfRenderTask: null,
-    gesture: { activePointers: new Map(), isPanning: false, pinchStart: 0 },
-    renderCache: { dirty: true, imageBitmap: null }
-};
-
-let els = {};
-let db = null;
-
-// ToolManager 簡易実装
-const ToolManager = {
-    current: 'pan',
-    set(mode) { this.current = mode; console.log('Tool set to:', mode); }
-};
-
-document.addEventListener('DOMContentLoaded', () => {
-    // 要素の紐付け
-    els = {
-        input: document.getElementById('file-input'),
-        name: document.getElementById('file-name'),
-        viewer: document.getElementById('viewer-container'),
-        text: document.getElementById('text-view'),
-        imgView: document.getElementById('img-view'),
-        img: document.getElementById('img-el'),
-        pdfWrap: document.getElementById('pdf-wrap'),
-        pdf: document.getElementById('pdf-canvas'),
-        pdfOverlay: document.getElementById('pdf-overlay'),
-        pdfControls: document.getElementById('pdf-controls'),
-        pageInfo: document.getElementById('page-info'),
-        cad: document.getElementById('cad-canvas'),
-        cadOverlay: document.getElementById('cad-overlay'),
-        fallback: document.getElementById('fallback')
-    };
-
-    els.input.addEventListener('change', e => {
-        if(e.target.files[0]) openFile(e.target.files[0]);
-    });
-
-    initDB();
-});
-
-function getDpr() { return window.devicePixelRatio || 1; }
-
-function showFallback(msg) {
-    hideControls();
-    els.fallback.textContent = msg;
-    showEl(els.fallback);
+/ =========================
+   SimpleDXF Parser (LINE, LWPOLYLINE, CIRCLE, ARC, TEXT/MTEXT)
+========================= /
+class SimpleDXF {
+  constructor(text) {
+    this.raw = text.replace(/\r\n/g, "\n");
+    this.tokens = this.tokenize(this.raw);
+    this.sections = this.scanSections(this.tokens);
+  }
+  tokenize(s) {
+    const arr = s.split("\n");
+    const out = [];
+    for (let i=0;i<arr.length;i+=2) {
+      const code = arr[i] !== undefined ? arr[i].trim() : "";
+      const value = arr[i+1] !== undefined ? arr[i+1].replace(/\r/g,"") : "";
+      if (code === "") continue;
+      const c = parseInt(code,10);
+      if (Number.isNaN(c)) continue;
+      out.push([c, value]);
+    }
+    return out;
+  }
+  scanSections(tokens) {
+    const sections = {};
+    let i=0, cur = null, key=null;
+    while (i<tokens.length) {
+      const [c,v] = tokens[i++];
+      if (c===0 && v==="SECTION") {
+        const t = tokens[i++]||[];
+        if (t[0]===2) { key=t[1]; cur=[]; sections[key]=cur; }
+      } else if (c===0 && v==="ENDSEC") {
+        cur=null; key=null;
+      } else if (cur) {
+        cur.push([c,v]);
+      }
+    }
+    return sections;
+  }
+  getEntities() {
+    const ents = [];
+    const sec = this.sections["ENTITIES"] || [];
+    let i=0, cur=null;
+    while (i<sec.length) {
+      const [c,v]=sec[i++];
+      if (c===0) {
+        if (cur) ents.push(cur);
+        cur = {type:v, data:{}};
+      } else if (cur) {
+        if (!cur.data[c]) cur.data[c]=[];
+        cur.data[c].push(v);
+      }
+    }
+    if (cur) ents.push(cur);
+    const out = [];
+    for (const e of ents) {
+      const type = e.type.toUpperCase();
+      const g = (code, idx=0, f=true) => {
+        if (!e.data[code] || e.data[code][idx]===undefined) return undefined;
+        return f ? parseFloat(e.data[code][idx]) : e.data[code][idx];
+      };
+      const layer = (e.data[8]?.[0]) || "0";
+      if (type==="LINE") {
+        out.push({kind:"LINE", layer, x1:g(10), y1:g(20), x2:g(11), y2:g(21)});
+      } else if (type==="LWPOLYLINE" || type==="POLYLINE") {
+        const xs = (e.data[10]||[]).map(Number);
+        const ys = (e.data[20]||[]).map(Number);
+        const pts=[]; for (let k=0;k<xs.length;k++) pts.push({x:xs[k], y:ys[k]});
+        const closed = (parseInt((e.data[70]?.[0] ?? "0"),10)&1)===1;
+        out.push({kind:"POLY", layer, pts, closed});
+      } else if (type==="CIRCLE") {
+        out.push({kind:"CIRCLE", layer, x:g(10), y:g(20), r:g(40)});
+      } else if (type==="ARC") {
+        out.push({kind:"ARC", layer, x:g(10), y:g(20), r:g(40), a1:g(50), a2:g(51)});
+      } else if (type==="TEXT") {
+        out.push({kind:"TEXT", layer, x:g(10), y:g(20), h:g(40)||2.5, text:(e.data[1]?.[0]||"")});
+      } else if (type==="MTEXT") {
+        out.push({kind:"TEXT", layer, x:g(10), y:g(20), h:g(40)||2.5, text:(e.data[1]||[]).join(" ")});
+      }
+    }
+    return out;
+  }
+  getLayers() {
+    const tbl = this.sections["TABLES"] || [];
+    let i=0, layers=[];
+    let inLayer=false, cur=null;
+    while (i<tbl.length) {
+      const [c,v]=tbl[i++];
+      if (c===0 && v==="LAYER") { inLayer=true; cur={name:"", color:null}; }
+      else if (c===0 && v==="ENDTAB") { inLayer=false; }
+      else if (inLayer && c===2) { cur.name=v; layers.push(cur); }
+      else if (inLayer && c===62) { cur.color=parseInt(v,10); }
+    }
+    const names = new Set(layers.map(l=>l.name));
+    if (!names.size) {
+      const ents = this.getEntities();
+      ents.forEach(e=>names.add(e.layer));
+      layers = [...names].map(n=>({name:n, color:null}));
+    }
+    return layers;
+  }
 }
 
-function updateImgTransform() {
-    if(!els.img) return;
-    els.img.style.transform = `translate(${state.imgX}px, ${state.imgY}px) scale(${state.scale})`;
-}
+/ =========================
+   JWW Loader (簡易) + JWW->DXF 変換
+========================= /
+async function openJWW(file) {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
 
-/* =========================
-   修正済みコアロジック (提供コードを統合)
-========================= */
+  if (!(bytes[0] === 0x4A && bytes[1] === 0x57 && bytes[2] === 0x57)) {
+    throw new Error("JWW形式ではありません（シグネチャ不一致）");
+  }
+  const dv = new DataView(buf);
+  let p = 0;
+  function readU16() { const v = dv.getUint16(p, true); p += 2; return v; }
+  function readU32() { const v = dv.getUint32(p, true); p += 4; return v; }
+  function readI32() { const v = dv.getInt32(p, true); p += 4; return v; }
+  function readF64() { const v = dv.getFloat64(p, true); p += 8; return v; }
+  function readBytes(n) { const v = bytes.slice(p, p + n); p += n; return v; }
 
-async function openFile(file) {
-    if(!file) return;
-    state.file = file;
-    state.scale = 1; state.imgX = 0; state.imgY = 0;
-    state.dpr = getDpr();
-    
-    ToolManager.set('pan');
-    await resetViewers();
+  // 粗いヘッダスキップ（将来的には厳密化推奨）
+  p = 32;
 
-    els.name.textContent = file.name;
-    const ext = file.name.split('.').pop().toLowerCase();
+  // レイヤ（16層x32バイトSJIS想定）
+  const layerCount = 16;
+  const layerNames = [];
+  for (let i = 0; i < layerCount; i++) {
+    const nameBytes = readBytes(32);
+    const name = decodeSJIS(nameBytes).replace(/\u0000+$/,"") || Layer${i+1};
+    layerNames.push(name);
+  }
+
+  const entities = [];
+  const layers = layerNames.map(n => ({ name: n, color: null }));
+
+  // 図形ブロック走査（type:u16, len:u32, payload...）の一般的パターンに準拠
+  while (p + 6 <= bytes.length) {
+    const type = readU16();
+    if (Number.isNaN(type)) break;
+    const len = readU32();
+    if (!len || p + len > bytes.length) break;
+    const end = p + len;
 
     try {
-        hideControls();
-        if(state.url) { URL.revokeObjectURL(state.url); state.url = null; }
-
-        if (['txt', 'csv', 'json', 'md', 'log'].includes(ext)) {
-            els.text.textContent = await file.text();
-            showEl(els.text);
-        } 
-        else if (ext === 'pdf') {
-            await renderPDF(file);
-            showEl(els.pdfWrap, 'flex');
-            showEl(els.pdfControls, 'flex');
-        } 
-        else if (/^(png|jpe?g|webp|gif|svg)$/i.test(ext)) {
-            state.url = URL.createObjectURL(file);
-            await new Promise((resolve, reject) => {
-                els.img.onload = resolve;
-                els.img.onerror = reject;
-                els.img.src = state.url;
-            });
-            updateImgTransform();
-            showEl(els.imgView, 'flex');
-            enableImagePanZoom();
-        } 
-        else {
-            showFallback(`${ext.toUpperCase()}は現在プレビュー対象外です`);
-        }
-        await saveRecent(file);
-    } catch (err) {
-        console.error(err);
-        showFallback(err?.message || '表示エラー');
+      const layerIdx = readI32();
+      const layer = layerNames[layerIdx] || "0";
+      if (type === 1) {
+        const x1 = readF64(), y1 = readF64(), x2 = readF64(), y2 = readF64();
+        entities.push({ kind: "LINE", layer, x1, y1, x2, y2 });
+      } else if (type === 2) {
+        const x = readF64(), y = readF64(), r = readF64();
+        entities.push({ kind: "CIRCLE", layer, x, y, r });
+      } else if (type === 3) {
+        const x = readF64(), y = readF64(), r = readF64();
+        const a1 = readF64(), a2 = readF64();
+        entities.push({ kind: "ARC", layer, x, y, r, a1, a2 });
+      } else if (type === 4) {
+        const n = readI32();
+        const pts = [];
+        for (let i=0;i<n;i++) { const x = readF64(), y = readF64(); pts.push({x,y}); }
+        const closed = !!readI32();
+        entities.push({ kind: "POLY", layer, pts, closed });
+      } else if (type === 5) {
+        const x = readF64(), y = readF64();
+        const h = readF64(), ang = readF64();
+        const blen = readI32();
+        const tb = readBytes(Math.max(0, Math.min(blen, end - p)));
+        const text = decodeSJIS(tb).replace(/\u0000+$/,"");
+        entities.push({ kind: "TEXT", layer, x, y, h, ang, text });
+      } else {
+        // 未対応タイプはスキップ
+        p = end;
+      }
+    } catch (e) {
+      p = end;
     }
+    p = end;
+  }
+
+  return { entities, layers };
 }
 
-async function renderPDF(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
-    state.pdfDoc = await loadingTask.promise;
-    state.pdfPage = 1;
-    await drawPDFPage();
-}
-
-async function drawPDFPage() {
-    if (!state.pdfDoc) return;
-    const token = ++state.pdfRenderToken;
-    const page = await state.pdfDoc.getPage(state.pdfPage);
-    
-    const viewport = page.getViewport({ scale: 1.5 * state.dpr });
-    els.pdf.width = viewport.width;
-    els.pdf.height = viewport.height;
-    
-    const renderContext = {
-        canvasContext: els.pdf.getContext('2d'),
-        viewport: viewport
-    };
-    state.pdfRenderTask = page.render(renderContext);
-    await state.pdfRenderTask.promise;
-    
-    els.pageInfo.textContent = `${state.pdfPage}/${state.pdfDoc.numPages}`;
-}
-
-async function resetViewers() {
-    if (state.url) URL.revokeObjectURL(state.url);
-    state.url = null;
-    
-    [els.pdfWrap, els.imgView, els.text, els.fallback, els.pdfControls].forEach(hideEl);
-    
-    if (state.pdfDoc) {
-        await state.pdfDoc.destroy();
-        state.pdfDoc = null;
+function decodeSJIS(u8arr){
+  try {
+    if (window.TextDecoder) {
+      const dec = new TextDecoder('shift_jis', {fatal:false});
+      return dec.decode(u8arr);
     }
-    releaseCanvas(els.pdf);
-    releaseCanvas(els.cad);
+  } catch(e) {}
+  // 近似代替
+  return Array.from(u8arr).map(c => (c>=32 && c<=126) ? String.fromCharCode(c) : (c===0? "" : "・")).join("");
+}
+
+function jwwToDXF(entities, layers){
+  const esc = (s)=> String(s||"").replace(/[\r\n]/g," ");
+  const lines = [];
+  lines.push("0","SECTION","2","HEADER","0","ENDSEC");
+  lines.push("0","SECTION","2","TABLES","0","TABLE","2","LAYER");
+  for (const l of layers) {
+    lines.push("0","LAYER","2", esc(l.name),"70","0","62", String(l.color ?? 7),"6","CONTINUOUS");
+  }
+  lines.push("0","ENDTAB","0","ENDSEC");
+  lines.push("0","SECTION","2","ENTITIES");
+  for (const e of entities) {
+    if (e.kind==="LINE") {
+      lines.push("0","LINE","8", esc(e.layer),"10", num(e.x1),"20", num(e.y1),"11", num(e.x2),"21", num(e.y2));
+    } else if (e.kind==="POLY") {
+      lines.push("0","LWPOLYLINE","8", esc(e.layer),"90", String(e.pts.length),"70", e.closed ? "1":"0");
+      for (const p of e.pts) lines.push("10", num(p.x),"20", num(p.y));
+    } else if (e.kind==="CIRCLE") {
+      lines.push("0","CIRCLE","8", esc(e.layer),"10", num(e.x),"20", num(e.y),"40", num(e.r));
+    } else if (e.kind==="ARC") {
+      lines.push("0","ARC","8", esc(e.layer),"10", num(e.x),"20", num(e.y),"40", num(e.r),"50", num(e.a1),"51", num(e.a2));
+    } else if (e.kind==="TEXT") {
+      lines.push("0","TEXT","8", esc(e.layer),"10", num(e.x),"20", num(e.y),"40", num(e.h||2.5),"1", esc(e.text||""));
+    }
+  }
+  lines.push("0","ENDSEC","0","EOF");
+  return lines.join("\n");
+  function num(v){ return Number.isFinite(v)? String(+v) : "0"; }
+}
+
+/ =========================
+   STATE
+========================= /
+const state = {
+  files: [],
+  active: null,   // {type:'pdf'|'img'|'text'|'zip'|'dxf', name}
+  url: null,
+  pdfDoc: null,
+  pdfPage: 1,
+  pdfScale: 1.5,
+  pdfRotate: 0,
+  renderTask: null,
+  dxf: null,
+  dxfView: { zoom:1, panX:0, panY:0, bbox:null, layerVis:{} },
+  pins: [], // {x,y,label,distPx,distMm}
+  pinMode: false,
+  annotMode: false,
+  annotStrokes: [], // [{pts:[{x,y}], color, width}]
+  db: null,
+  folder: "default",
+  scaleMmPerPx: 1
+};
+const els = {
+  img: document.getElementById('imgView'),
+  pdf: document.getElementById('pdfCanvas'),
+  dxf: document.getElementById('dxfCanvas'),
+  text: document.getElementById('textView'),
+  fallback: document.getElementById('fallback'),
+  pgInfo: document.getElementById('pgInfo'),
+  status: document.getElementById('status'),
+  coord: document.getElementById('coord'),
+  mem: document.getElementById('mem'),
+  side: document.getElementById('side'),
+  layers: document.getElementById('layers'),
+  secLayers: document.getElementById('secLayers'),
+  viewer: document.getElementById('viewer'),
+  main: document.getElementById('main'),
+  scaleSelect: document.getElementById('scaleSelect'),
+  badgeActive: document.getElementById('badgeActive')
+};
+
+/ =========================
+   ERROR SAFE
+========================= /
+window.addEventListener('error', (e)=> showError(e.message || (e.error?.message) || e));
+window.addEventListener('unhandledrejection', (e)=> showError(e.reason?.message || e.reason || e));
+
+/ =========================
+   INIT
+========================= /
+document.getElementById('fileInput').addEventListener('change', onFiles);
+document.getElementById('btnReset').addEventListener('click', resetAll);
+document.getElementById('btnFolder').addEventListener('click', chooseFolder);
+document.getElementById('btnCache').addEventListener('click', listCache);
+document.getElementById('btnSide').addEventListener('click', ()=> els.side.hidden = !els.side.hidden);
+document.getElementById('btnSideClose').addEventListener('click', ()=> els.side.hidden = true);
+
+document.getElementById('btnFit').addEventListener('click', fitView);
+document.getElementById('btnZoomIn').addEventListener('click', ()=> zoomBy(1.2));
+document.getElementById('btnZoomOut').addEventListener('click', ()=> zoomBy(1/1.2));
+document.getElementById('btnRotate').addEventListener('click', rotatePDF);
+document.getElementById('btnPrev').addEventListener('click', ()=> changePage(-1));
+document.getElementById('btnNext').addEventListener('click', ()=> changePage(1));
+document.getElementById('btnPin').addEventListener('click', togglePinMode);
+document.getElementById('btnAnnot').addEventListener('click', toggleAnnotMode);
+document.getElementById('btnAnnotSave').addEventListener('click', saveAnnotations);
+document.getElementById('btnAnnotClear').addEventListener('click', ()=>{ state.annotStrokes=[]; renderActive(); });
+
+els.scaleSelect.addEventListener('change', (e)=>{ state.scaleMmPerPx = parseFloat(e.target.value||"1"); updateStatus(); renderActive(); });
+
+initDB().catch(console.warn);
+setupPointerHandlers();
+fitCanvasToContainer();
+window.addEventListener('resize', ()=>{ fitCanvasToContainer(); renderActive(); updateMem(); });
+setInterval(updateMem, 2000);
+
+/ =========================
+   FILE OPEN (multiple)
+========================= /
+async function onFiles(e){
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  for (const file of files) {
+    try {
+      await openFile(file);
+      await cachePut(file);
+    } catch(err) {
+      showError(err);
+    }
+  }
+}
+
+async function openFile(file){
+  const ext = file.name.split('.').pop().toLowerCase();
+  state.files.push(file);
+  state.active = {name:file.name, type:null};
+  if (state.url) { URL.revokeObjectURL(state.url); state.url=null; }
+  hideAll();
+
+  if (['png','jpg','jpeg','webp','gif'].includes(ext)) {
+    await openIMG(file);
+  } else if (ext==='pdf') {
+    await openPDF(file);
+  } else if (ext==='txt' || ext==='json' || ext==='csv' || ext==='log') {
+    await openTEXT(file);
+  } else if (ext==='zip') {
+    await openZIP(file);
+  } else if (ext==='dxf') {
+    await openDXF(await file.text(), file.name);
+  } else if (ext==='jww' || ext==='jwc') {
+    await openJWWWrapper(file);
+  } else {
+    showError("未対応: " + ext);
+  }
+  updateStatus();
+}
+
+/ =========================
+   IMAGE
+========================= /
+async function openIMG(file){
+  const url = URL.createObjectURL(file);
+  state.url = url;
+  state.active.type='img';
+  els.img.src = url;
+  els.img.onload = ()=> fitView();
+  els.img.style.display="block";
+  els.pgInfo.textContent = "-";
+  els.badgeActive.textContent = "IMG";
+}
+
+/ =========================
+   TEXT
+========================= /
+async function openTEXT(file){
+  const text = await file.text();
+  state.active.type='text';
+  els.text.textContent = text;
+  els.text.style.display="block";
+  els.pgInfo.textContent = "-";
+  els.badgeActive.textContent = "TEXT";
+}
+
+/ =========================
+   PDF
+========================= /
+async function openPDF(file){
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+  state.pdfDoc = pdf;
+  state.active.type='pdf';
+  state.pdfPage = 1;
+  state.pdfRotate = 0;
+  await loadAnnotations();
+  els.pgInfo.textContent = 1 / ${pdf.numPages};
+  await renderPDF();
+  els.badgeActive.textContent = "PDF";
+}
+async function renderPDF(){
+  if (!state.pdfDoc) return;
+  const page = await state.pdfDoc.getPage(state.pdfPage);
+  const viewport = page.getViewport({scale: state.pdfScale, rotation: state.pdfRotate});
+  const canvas = els.pdf;
+  const ctx = canvas.getContext('2d', { alpha:false, desynchronized:true });
+  // devicePixelRatio対応
+  const ratio = window.devicePixelRatio || 1;
+  canvas.style.width = Math.floor(viewport.width) + "px";
+  canvas.style.height = Math.floor(viewport.height) + "px";
+  canvas.width = Math.floor(viewport.width  ratio);
+  canvas.height = Math.floor(viewport.height * ratio);
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+
+  if (state.renderTask) try{ state.renderTask.cancel(); }catch{}
+
+  state.renderTask = page.render({ canvasContext: ctx, viewport });
+  try {
+    await state.renderTask.promise;
+  } catch(e) {
+    // キャンセル時などは握りつぶし
+  }
+  els.pdf.style.display="block";
+  drawAnnotations();
+}
+async function changePage(d){
+  if (!state.pdfDoc) return;
+  const n = Math.min(Math.max(1, state.pdfPage + d), state.pdfDoc.numPages);
+  if (n===state.pdfPage) return;
+  state.pdfPage = n;
+  els.pgInfo.textContent = ${n} / ${state.pdfDoc.numPages};
+  await loadAnnotations();
+  await renderPDF();
+}
+function rotatePDF(){
+  if (state.active?.type!=='pdf') return;
+  state.pdfRotate = (state.pdfRotate + 90) % 360;
+  renderPDF();
 }
 
 /* =========================
-   HELPER FUNCTIONS
-========================= */
-function showEl(el, display='block'){ if(!el) return; el.style.display = display; }
-function hideEl(el){ if(!el) return; el.style.display = 'none'; }
-function hideControls(){ [els.pdfControls].forEach(hideEl); }
-
-function releaseCanvas(canvas){
-    if(!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx?.clearRect(0, 0, canvas.width, canvas.height);
-    canvas.width = 1; canvas.height = 1;
+   ZIP
+========================= /
+async function openZIP(file){
+  const zip = await JSZip.loadAsync(file);
+  state.active.type='zip';
+  const list = Object.keys(zip.files);
+  els.text.style.display="block";
+  els.text.textContent = "ZIP内容:\n" + list.join("\n");
+  els.pgInfo.textContent = "-";
+  els.badgeActive.textContent = "ZIP";
 }
 
-function enableImagePanZoom() {
-    let last = null; let pan = false;
-    els.imgView.onpointerdown = e => {
-        pan = true;
-        last = { x: e.clientX - state.imgX, y: e.clientY - state.imgY };
-        els.imgView.setPointerCapture(e.pointerId);
-    };
-    els.imgView.onpointermove = e => {
-        if(!pan) return;
-        state.imgX = e.clientX - last.x;
-        state.imgY = e.clientY - last.y;
-        updateImgTransform();
-    };
-    els.imgView.onpointerup = () => pan = false;
-    
-    // ホイールズーム追加
-    els.imgView.onwheel = e => {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        state.scale *= delta;
-        updateImgTransform();
-    };
-}
+/ =========================
+   DXF
+========================= /
+async function openDXF(text, name="DXF"){
+  state.dxf = new SimpleDXF(text);
+  state.active.type='dxf';
 
-function changePage(diff) {
-    if (!state.pdfDoc) return;
-    const newPage = state.pdfPage + diff;
-    if (newPage > 0 && newPage <= state.pdfDoc.numPages) {
-        state.pdfPage = newPage;
-        drawPDFPage();
+  const ents = state.dxf.getEntities();
+  const bb = {minX:Infinity,minY:Infinity,maxX:-Infinity,maxY:-Infinity};
+  const addPt = (x,y)=>{ if(Number.isFinite(x)&&Number.isFinite(y)){ bb.minX=Math.min(bb.minX,x); bb.maxX=Math.max(bb.maxX,x); bb.minY=Math.min(bb.minY,y); bb.maxY=Math.max(bb.maxY,y); } };
+  for (const e of ents) {
+    if (e.kind==="LINE") { addPt(e.x1,e.y1); addPt(e.x2,e.y2); }
+    else if (e.kind==="POLY") e.pts.forEach(p=>addPt(p.x,p.y));
+    else if (e.kind==="CIRCLE"||e.kind==="ARC") { addPt(e.x-e.r, e.y-e.r); addPt(e.x+e.r, e.y+e.r); }
+    else if (e.kind==="TEXT") addPt(e.x,e.y);
+  }
+  state.dxfView.bbox = bb;
+  state.dxfView.zoom = 1;
+  state.dxfView.panX = 0;
+  state.dxfView.panY = 0;
+
+  const layers = state.dxf.getLayers();
+  state.dxfView.layerVis = {};
+  layers.forEach(l=> state.dxfView.layerVis[l.name]=true);
+  buildLayerPanel(layers);
+
+  els.dxf.style.display="block";
+  els.pgInfo.textContent = "-";
+  els.side.hidden=false;
+  els.secLayers.hidden=false;
+  els.badgeActive.textContent = "DXF";
+
+  fitDXF();
+  renderDXF();
+}
+function buildLayerPanel(layers){
+  els.layers.innerHTML="";
+  for (const l of layers) {
+    const row = document.createElement('div');
+    row.className="layer-item";
+    const cb = document.createElement('input');
+    cb.type="checkbox"; cb.checked=true;
+    cb.addEventListener('change', ()=>{ state.dxfView.layerVis[l.name]=cb.checked; renderDXF(); });
+    const sw = document.createElement('span');
+    sw.textContent = l.name;
+    sw.style.flex="1";
+    row.appendChild(cb);
+    row.appendChild(sw);
+    els.layers.appendChild(row);
+  }
+}
+function fitDXF(){
+  const c = els.dxf;
+  resizeCanvasToDisplaySize(c);
+  const bb = state.dxfView.bbox;
+  if (!bb || !isFinite(bb.minX)) return;
+  const w = c.width;
+  const h = c.height;
+  const dx = (bb.maxX - bb.minX) || 1;
+  const dy = (bb.maxY - bb.minY) || 1;
+  const m = 0.9;
+  const zx = (wm)/dx;
+  const zy = (hm)/dy;
+  state.dxfView.zoom = Math.min(zx, zy);
+  state.dxfView.panX = -bb.minXstate.dxfView.zoom + (w - dxstate.dxfView.zoom)/2;
+  state.dxfView.panY = -bb.minYstate.dxfView.zoom + (h - dystate.dxfView.zoom)/2;
+}
+function renderDXF(){
+  const c = els.dxf;
+  const ctx = c.getContext('2d', { alpha:false, desynchronized:true });
+  resizeCanvasToDisplaySize(c);
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.save();
+  ctx.translate(0, c.height);
+  ctx.scale(1, -1);
+
+  const ents = state.dxf.getEntities();
+  const vis = state.dxfView.layerVis;
+  const Z = state.dxfView.zoom, PX = state.dxfView.panX, PY = state.dxfView.panY;
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#6dd3ff";
+  ctx.fillStyle = "#6dd3ff";
+
+  for (const e of ents) {
+    if (!vis[e.layer]) continue;
+    ctx.beginPath();
+    if (e.kind==="LINE") {
+      ctx.moveTo(e.x1Z+PX, e.y1Z+PY);
+      ctx.lineTo(e.x2Z+PX, e.y2Z+PY);
+      ctx.stroke();
+    } else if (e.kind==="POLY") {
+      if (e.pts.length<2) continue;
+      ctx.moveTo(e.pts[0].xZ+PX, e.pts[0].yZ+PY);
+      for (let i=1;i<e.pts.length;i++){
+        const p=e.pts[i];
+        ctx.lineTo(p.xZ+PX, p.yZ+PY);
+      }
+      if (e.closed) ctx.closePath();
+      ctx.stroke();
+    } else if (e.kind==="CIRCLE") {
+      ctx.arc(e.xZ+PX, e.yZ+PY, e.rZ, 0, Math.PI2);
+      ctx.stroke();
+    } else if (e.kind==="ARC") {
+      const a1 = (e.a1||0)Math.PI/180;
+      const a2 = (e.a2||0)Math.PI/180;
+      ctx.arc(e.xZ+PX, e.yZ+PY, e.rZ, a1, a2);
+      ctx.stroke();
+    } else if (e.kind==="TEXT") {
+      ctx.save();
+      ctx.scale(1,-1);
+      ctx.fillStyle = "#b8c1d1";
+      const px = e.xZ+PX;
+      const py = c.height - (e.yZ+PY);
+      const size = Math.max(10, e.hZ);
+      ctx.font = ${size}px sans-serif;
+      ctx.fillText(e.text, px, py);
+      ctx.restore();
     }
+  }
+  ctx.restore();
+
+  drawPins();
 }
 
-async function initDB() {
-    const request = indexedDB.open("ViewerDB", 1);
-    request.onupgradeneeded = e => {
-        db = e.target.result;
-        db.createObjectStore("recents", { keyPath: "name" });
+/ =========================
+   JWW -> DXF -> SimpleDXF 統合
+========================= /
+async function openJWWWrapper(file){
+  try{
+    const {entities, layers} = await openJWW(file);
+    const dxfText = jwwToDXF(entities, layers);
+    await openDXF(dxfText, file.name);
+    toast("JWWを読み込みました");
+  }catch(err){
+    showError("JWW読み込み失敗: " + (err?.message||err));
+  }
+}
+
+/ =========================
+   CANVAS SIZING
+========================= /
+function fitCanvasToContainer(){
+  for (const cv of [els.pdf, els.dxf]) resizeCanvasToDisplaySize(cv);
+}
+function resizeCanvasToDisplaySize(canvas, ratio=window.devicePixelRatio||1){
+  if (!canvas) return;
+  const r = Math.max(1, ratio);
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth || 0;
+  const cssH = canvas.clientHeight || canvas.parentElement.clientHeight || 0;
+  if (!cssW || !cssH) return;
+  const w = Math.floor(cssW  r);
+  const h = Math.floor(cssH * r);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+/* =========================
+   VIEW CONTROLS
+========================= /
+function fitView(){
+  if (state.active?.type==='pdf') {
+    state.pdfScale = 1.5;
+    renderPDF();
+  } else if (state.active?.type==='dxf') {
+    fitDXF(); renderDXF();
+  } else if (state.active?.type==='img') {
+    // 画像はCSSフィット。ピン座標はビューワ相対
+  }
+}
+function zoomBy(f){
+  if (state.active?.type==='pdf') {
+    state.pdfScale = Math.max(0.2, Math.min(10, state.pdfScalef));
+    renderPDF();
+  } else if (state.active?.type==='dxf') {
+    state.dxfView.zoom = Math.max(0.05, Math.min(50, state.dxfView.zoomf));
+    renderDXF();
+  }
+}
+
+/ =========================
+   POINTER / GESTURE (pan/zoom, pins, annot)
+========================= /
+function setupPointerHandlers(){
+  const target = els.viewer;
+  let dragging=false, lastX=0, lastY=0;
+
+  target.addEventListener('pointerdown', (e)=>{
+    dragging=true; lastX=e.clientX; lastY=e.clientY; target.setPointerCapture(e.pointerId);
+    if (state.annotMode && state.active?.type==='pdf') {
+      startAnnotStroke(e);
+    }
+  });
+  target.addEventListener('pointermove', (e)=>{
+    els.coord.textContent = ${Math.round(e.clientX)}, ${Math.round(e.clientY)};
+    if (!dragging) return;
+    const dx=e.clientX-lastX, dy=e.clientY-lastY;
+    if (state.active?.type==='dxf') {
+      state.dxfView.panX += dx(window.devicePixelRatio||1);
+      state.dxfView.panY -= dy(window.devicePixelRatio||1);
+      renderDXF();
+    } else if (state.active?.type==='pdf' && !state.annotMode) {
+      els.main.scrollLeft -= dx;
+      els.main.scrollTop -= dy;
+    } else if (state.active?.type==='pdf' && state.annotMode) {
+      drawAnnotStroke(e, true);
+    }
+    lastX=e.clientX; lastY=e.clientY;
+  }, {passive:true});
+  target.addEventListener('pointerup', (e)=>{
+    dragging=false; try{ target.releasePointerCapture(e.pointerId); }catch{}
+    endAnnotStroke();
+  });
+  target.addEventListener('wheel', (e)=>{
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const factor = e.deltaY<0 ? 1.1 : 1/1.1;
+    zoomBy(factor);
+  }, {passive:false});
+  target.addEventListener('click', (e)=>{
+    if (state.pinMode) placePin(e);
+  });
+}
+
+/ =========================
+   PIN MEASURE
+========================= /
+function togglePinMode(){
+  state.pinMode = !state.pinMode;
+  document.getElementById('btnPin').style.outline = state.pinMode ? "2px solid var(--accent)" : "none";
+  if (state.pinMode) toast("2点をピン留めすると距離を計測（縮尺: "+state.scaleMmPerPx+" mm/px）");
+}
+function placePin(e){
+  const rect = els.viewer.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  state.pins.push({x,y,label:String(state.pins.length+1)});
+  if (state.pins.length%2===0) {
+    const a = state.pins[state.pins.length-2];
+    const b = state.pins[state.pins.length-1];
+    const dx = b.x-a.x, dy=b.y-a.y;
+    const distPx = Math.hypot(dx,dy);
+    const distMm = distPx  state.scaleMmPerPx;
+    a.distPx = b.distPx = distPx;
+    a.distMm = b.distMm = distMm;
+    toast(距離: ${distMm.toFixed(1)} mm (${distPx.toFixed(1)} px));
+  }
+  renderActive();
+}
+function drawPins(){
+  Array.from(document.querySelectorAll('.pin')).forEach(n=>n.remove());
+  for (const p of state.pins) {
+    const div = document.createElement('div');
+    div.className="pin";
+    div.style.left = (p.x-8)+"px";
+    div.style.top = (p.y-8)+"px";
+    div.title = p.distMm ? ${p.label}: ${p.distMm.toFixed(1)} mm : p.label;
+    els.viewer.appendChild(div);
+  }
+}
+
+/* =========================
+   PDF ANNOTATION (strokes)
+========================= /
+function toggleAnnotMode(){
+  state.annotMode = !state.annotMode;
+  document.getElementById('btnAnnot').style.outline = state.annotMode ? "2px solid var(--accent)" : "none";
+  if (state.annotMode) toast("PDF注釈モード: ドラッグで描画、Ctrl+Zで取り消し");
+}
+function startAnnotStroke(e){
+  if (!state.annotMode || state.active?.type!=='pdf') return;
+  const c = els.pdf;
+  const rect = c.getBoundingClientRect();
+  const x = (e.clientX - rect.left);
+  const y = (e.clientY - rect.top);
+  state._curStroke = {pts:[{x,y}], color:"#ffcc00", width:2};
+  drawAnnotations();
+}
+function drawAnnotStroke(e){
+  if (!state.annotMode || state.active?.type!=='pdf' || !state._curStroke) return;
+  const c = els.pdf;
+  const rect = c.getBoundingClientRect();
+  const x = (e.clientX - rect.left);
+  const y = (e.clientY - rect.top);
+  state._curStroke.pts.push({x,y});
+  drawAnnotations();
+}
+function endAnnotStroke(){
+  if (state._curStroke) {
+    if (state._curStroke.pts.length>1) state.annotStrokes.push(state._curStroke);
+    state._curStroke = null;
+    drawAnnotations();
+  }
+}
+function drawAnnotations(){
+  if (state.active?.type!=='pdf') return;
+  const c = els.pdf;
+  const ctx = c.getContext('2d');
+  // PDF描画後に重ねる
+  const strokes = [...state.annotStrokes];
+  if (state._curStroke) strokes.push(state._curStroke);
+  ctx.save();
+  ctx.lineJoin = "round"; ctx.lineCap="round";
+  for (const s of strokes) {
+    if (s.pts.length<2) continue;
+    ctx.beginPath();
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.width;
+    ctx.moveTo(s.pts[0].x, s.pts[0].y);
+    for (let i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i].x, s.pts[i].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+window.addEventListener('keydown', (e)=>{
+  if (e.ctrlKey && e.key.toLowerCase()==='z' && state.annotStrokes.length) {
+    state.annotStrokes.pop(); renderActive();
+  }
+});
+async function saveAnnotations(){
+  if (state.active?.type!=='pdf') { toast("PDFが開かれていません"); return; }
+  const key = annot:${state.folder}:${state.active.name}:p${state.pdfPage};
+  await dbPut('kv', {k:key, v: JSON.stringify(state.annotStrokes), folder: state.folder, ts: Date.now()});
+  toast("注釈を保存しました");
+}
+async function loadAnnotations(){
+  if (state.active?.type!=='pdf') return;
+  const key = annot:${state.folder}:${state.active.name}:p${state.pdfPage};
+  const rec = await dbGet('kv', key);
+  if (rec?.v) {
+    try { state.annotStrokes = JSON.parse(rec.v) || []; }
+    catch{ state.annotStrokes=[]; }
+  } else state.annotStrokes=[];
+}
+
+/ =========================
+   IndexedDB CACHE (kv: {k, v|blob, folder, ts})
+========================= /
+async function initDB(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open('genba_viewer_db', 1);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if (!db.objectStoreNames.contains('kv')) {
+        const s = db.createObjectStore('kv', { keyPath:'k' });
+        try { s.createIndex('folder', 'folder', { unique:false }); } catch{}
+        try { s.createIndex('ts', 'ts', { unique:false }); } catch{}
+      }
     };
-    request.onsuccess = e => { db = e.target.result; };
+    req.onsuccess = ()=>{ state.db=req.result; resolve(); };
+    req.onerror = ()=> reject(req.error);
+  });
+}
+function tx(store, mode='readonly'){
+  if (!state.db) throw new Error("DB未初期化");
+  return state.db.transaction(store, mode).objectStore(store);
+}
+function dbPut(store, obj){
+  return new Promise((res,rej)=>{
+    try{
+      const r = tx(store, 'readwrite').put(obj);
+      r.onsuccess = ()=>res(true);
+      r.onerror = ()=>rej(r.error);
+    }catch(e){ rej(e); }
+  });
+}
+function dbGet(store, key){
+  return new Promise((res,rej)=>{
+    try{
+      const r = tx(store).get(key);
+      r.onsuccess = ()=>res(r.result);
+      r.onerror = ()=>rej(r.error);
+    }catch(e){ rej(e); }
+  });
+}
+function dbIndexGetAll(indexName, query){
+  return new Promise((res,rej)=>{
+    try{
+      const s = tx('kv').index(indexName);
+      const r = s.getAll(query);
+      r.onsuccess = ()=>res(r.result||[]);
+      r.onerror = ()=>rej(r.error);
+    }catch(e){ rej(e); }
+  });
+}
+async function cachePut(file){
+  if (!state.db) return;
+  const buf = await file.arrayBuffer();
+  const key = file:${state.folder}:${file.name};
+  await dbPut('kv', {k:key, v:new Blob([buf]), folder: state.folder, ts: Date.now()});
+}
+async function listCache(){
+  try{
+    const all = await dbIndexGetAll('folder', state.folder);
+    const items = all.filter(x=> String(x.k).startsWith(file:${state.folder}:));
+    const names = items.map(x=> x.k.split(':').slice(2).join(':'));
+    alert(フォルダ "${state.folder}" のキャッシュ:\n-  + (names.length? names.join('\n- '): "(なし)"));
+  }catch(e){
+    showError("キャッシュ参照失敗: " + e.message);
+  }
+}
+async function chooseFolder(){
+  const name = prompt("フォルダ名を入力（既定: default）", state.folder || "default");
+  if (!name) return;
+  state.folder = name.trim() || "default";
+  toast(フォルダ切替: ${state.folder});
+  updateStatus();
 }
 
-async function saveRecent(file) {
-    if (!db || file.size > 5 * 1024 * 1024) return;
-    const tx = db.transaction("recents", "readwrite");
-    tx.objectStore("recents").put({ name: file.name, blob: file, ts: Date.now() });
+/ =========================
+   RENDER ACTIVE WRAPPER
+========================= /
+function renderActive(){
+  if (state.active?.type==='pdf') { renderPDF(); }
+  else if (state.active?.type==='dxf') { renderDXF(); }
+  drawPins();
+}
+
+/ =========================
+   UI HELPERS
+========================= /
+function hideAll(){
+  els.img.style.display="none";
+  els.pdf.style.display="none";
+  els.dxf.style.display="none";
+  els.text.style.display="none";
+  els.fallback.textContent="";
+}
+function updateStatus(){
+  els.status.textContent = ${state.active?.type?.toUpperCase()||'NONE'} | 縮尺 ${state.scaleMmPerPx} mm/px | フォルダ ${state.folder};
+  els.badgeActive.textContent = (state.active?.type||"NONE").toUpperCase();
+}
+function toast(msg){
+  els.fallback.textContent = msg;
+  setTimeout(()=>{ if (els.fallback.textContent===msg) els.fallback.textContent=""; }, 3000);
+}
+function updateMem(){
+  if (performance && performance.memory) {
+    const used = (performance.memory.usedJSHeapSize/1048576)|0;
+    const total = (performance.memory.totalJSHeapSize/1048576)|0;
+    els.mem.textContent = MEM ${used}/${total} MB;
+  } else {
+    els.mem.textContent = "";
+  }
+}
+function showError(msg){
+  const text = (typeof msg === "string") ? msg : (msg?.message || JSON.stringify(msg));
+  console.error(text);
+  els.fallback.textContent = "ERROR: " + text;
+}
+
+/ =========================
+   RESET
+========================= */
+function resetAll(){
+  try {
+    if (state.url) { URL.revokeObjectURL(state.url); state.url=null; }
+    if (state.renderTask) { try{ state.renderTask.cancel(); }catch{} state.renderTask=null; }
+    state.pdfDoc = null;
+    state.dxf = null;
+    state.pins = [];
+    state.annotStrokes = [];
+    state.active = null;
+    hideAll();
+    els.side.hidden=true;
+    els.secLayers.hidden=true;
+    els.pgInfo.textContent="-";
+    updateStatus();
+    toast("リセットしました");
+  } catch(e){
+    console.warn(e);
+  }
 }
 </script>
+
 </body>
 </html>
